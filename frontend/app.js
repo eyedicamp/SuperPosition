@@ -13,7 +13,7 @@ function formatDayTime(idx, spd, slotMinutes) {
   const minutes = within * slotMinutes;
   const hh = Math.floor(minutes / 60);
   const mm = minutes % 60;
-  return `${DAYS[day]} ${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+  return `${DAYS[day]} ${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
 function parseCSVIndices(s) {
@@ -31,7 +31,7 @@ function parseCSVIndices(s) {
 // =========================
 function mulberry32(seed) {
   let a = seed >>> 0;
-  return function() {
+  return function () {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
@@ -64,7 +64,6 @@ function generateRandomAvailability({
   const totalSlots = 7 * spd;
   const slotsPerHour = Math.floor(60 / slotMinutes);
 
-  // init all false
   const availability = Array.from({ length: numPeople }, () => Array(totalSlots).fill(false));
 
   // base availability true for 09:00~21:00 daily
@@ -127,7 +126,8 @@ function generateRandomPreferences({
 }
 
 // =========================
-// Score computation
+// Score computation (for Top-K display only)
+// (Backend도 동일한 스코어를 사용한다고 가정)
 // score[s] = Σ w_p * a_{p,s} + prefBonus*Σ w_p*a_{p,s}*b_{p,s} - latePenaltyPerSlot*lateOverlap(s)
 // =========================
 function computeScores({
@@ -160,7 +160,6 @@ function computeScores({
     let weightedPref = 0;
 
     for (let p = 0; p < numPeople; p++) {
-      // a_{p,s}: can attend all slots in window
       let ok = true;
       for (let t = s; t < s + meetingLenSlots; t++) {
         if (!availability[p][t]) { ok = false; break; }
@@ -172,7 +171,6 @@ function computeScores({
       }
     }
 
-    // lateOverlap(s): how many slots in meeting window are >= 20:00 (within each day)
     let overlap = 0;
     for (let t = s; t < s + meetingLenSlots; t++) {
       const tod = t % spd;
@@ -191,59 +189,30 @@ function computeScores({
 }
 
 // =========================
-// Simulated Annealing over discrete start index
-// We maximize score, equivalently minimize E = -score
+// Backend API
 // =========================
-function optimizeSA(scores, {
-  seed = 123,
-  steps = 12000,
-  t0 = 2.0,
-  tEnd = 0.02,
-  neighborRadius = 24
-} = {}) {
-  const rng = mulberry32(seed);
-  const n = scores.length;
+function getApiBase() {
+  const raw = (document.getElementById("apiBase")?.value || "").trim();
+  if (!raw) return "";
+  return raw.replace(/\/+$/, ""); // trailing slash 제거
+}
 
-  // start from a random state
-  let x = randInt(rng, 0, n - 1);
-  let bestX = x;
-  let bestScore = scores[x];
+async function callSolveAPI(apiBase, payload) {
+  const res = await fetch(`${apiBase}/solve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-  for (let i = 0; i < steps; i++) {
-    // exponential cooling
-    const frac = i / Math.max(1, steps - 1);
-    const T = t0 * Math.pow(tEnd / t0, frac);
-
-    // propose neighbor
-    const delta = randInt(rng, -neighborRadius, neighborRadius);
-    let y = x + delta;
-    if (y < 0) y = 0;
-    if (y >= n) y = n - 1;
-
-    const sX = scores[x];
-    const sY = scores[y];
-    const dE = -(sY - sX); // E=-score => dE = E(y)-E(x)=-(sY-sX)
-
-    // accept if better or with probability exp(-dE/T)
-    if (dE <= 0) {
-      x = y;
-    } else {
-      const prob = Math.exp(-dE / Math.max(1e-9, T));
-      if (rng() < prob) x = y;
-    }
-
-    const sNow = scores[x];
-    if (sNow > bestScore) {
-      bestScore = sNow;
-      bestX = x;
-    }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API error ${res.status}: ${text}`);
   }
-
-  return { bestStart: bestX, bestScore };
+  return await res.json();
 }
 
 // =========================
-// UI wiring
+// UI state
 // =========================
 let state = {
   availability: null,
@@ -255,6 +224,8 @@ let state = {
 };
 
 function readParams() {
+  const apiBase = getApiBase();
+
   const numPeople = Number(document.getElementById("numPeople").value);
   const slotMinutes = Number(document.getElementById("slotMinutes").value);
 
@@ -271,6 +242,7 @@ function readParams() {
   const topK = Number(document.getElementById("topK").value);
 
   return {
+    apiBase,
     numPeople, slotMinutes, meetingMinutes, prefWindowMinutes,
     prefBonus, latePenalty, importantPeople, importantWeight,
     seed, topK
@@ -281,7 +253,6 @@ function summarizeData(params) {
   const { numPeople, slotMinutes, meetingMinutes, prefWindowMinutes, importantPeople, importantWeight } = params;
   const spd = state.spd;
 
-  // rough stats: average free ratio per person
   const totalSlots = state.totalSlots;
   let freeRatioSum = 0;
   for (let p = 0; p < numPeople; p++) {
@@ -291,7 +262,6 @@ function summarizeData(params) {
   }
   const avgFree = freeRatioSum / numPeople;
 
-  // show preferred start sample
   const prefSamples = [];
   for (let p = 0; p < Math.min(numPeople, 6); p++) {
     const idx = state.prefStartOk[p].findIndex(v => v);
@@ -304,31 +274,64 @@ function summarizeData(params) {
     `Meeting length: ${meetingMinutes} min`,
     `Preferred window length: ${prefWindowMinutes} min`,
     `Important people: [${importantPeople.join(", ")}], important_weight=${importantWeight}`,
-    `Avg free ratio (random data): ${(avgFree*100).toFixed(1)}%`,
+    `Avg free ratio (random data): ${(avgFree * 100).toFixed(1)}%`,
     `Preference start samples: ${prefSamples.join(" | ")}`
   ].join("\n");
 }
 
-function computeAndRender() {
+function renderResult(text, muted = false) {
+  const el = document.getElementById("result");
+  el.textContent = text;
+  el.classList.toggle("muted", muted);
+}
+
+function renderTopCandidates(text, muted = false) {
+  const el = document.getElementById("topCandidates");
+  el.textContent = text;
+  el.classList.toggle("muted", muted);
+}
+
+function validateMinutesDivisible(minutes, slotMinutes, label) {
+  if (minutes % slotMinutes !== 0) {
+    throw new Error(`${label}(${minutes})는 슬롯(${slotMinutes})으로 나누어 떨어져야 합니다.`);
+  }
+}
+
+// =========================
+// Main: generate + optimize
+// =========================
+async function computeAndRender() {
   const params = readParams();
+  if (!params.apiBase) {
+    renderResult("백엔드 API Base URL이 비어있습니다.", false);
+    return;
+  }
   if (!state.availability || !state.prefStartOk) return;
 
   const spd = state.spd;
   const totalSlots = state.totalSlots;
 
-  const meetingLenSlots = Math.floor(params.meetingMinutes / params.slotMinutes);
-  const prefWindowSlots = Math.floor(params.prefWindowMinutes / params.slotMinutes);
+  try {
+    validateMinutesDivisible(params.meetingMinutes, params.slotMinutes, "모임 길이(분)");
+    validateMinutesDivisible(params.prefWindowMinutes, params.slotMinutes, "선호 구간 길이(분)");
+  } catch (e) {
+    renderResult(String(e.message || e), false);
+    return;
+  }
+
+  const meetingLenSlots = params.meetingMinutes / params.slotMinutes;
+  const prefWindowSlots = params.prefWindowMinutes / params.slotMinutes;
 
   if (meetingLenSlots <= 0) {
-    renderResult("meetingMinutes가 slotMinutes보다 작습니다.");
+    renderResult("meetingMinutes가 slotMinutes보다 작습니다.", false);
     return;
   }
   if (meetingLenSlots >= totalSlots) {
-    renderResult("meeting length가 전체 주간 슬롯보다 큽니다.");
+    renderResult("meeting length가 전체 주간 슬롯보다 큽니다.", false);
     return;
   }
   if (prefWindowSlots <= 0) {
-    renderResult("prefWindowMinutes가 slotMinutes보다 작습니다.");
+    renderResult("prefWindowMinutes가 slotMinutes보다 작습니다.", false);
     return;
   }
 
@@ -339,6 +342,7 @@ function computeAndRender() {
   }
   state.weights = weights;
 
+  // (Top-K 표시용) 로컬에서 동일 score 계산
   const { scores, counts, wAtt, wPref, lateOverlap } = computeScores({
     availability: state.availability,
     prefStartOk: state.prefStartOk,
@@ -347,70 +351,78 @@ function computeAndRender() {
     slotMinutes: params.slotMinutes,
     weights,
     prefBonus: params.prefBonus,
-    latePenaltyPerSlot: params.latePenalty
+    latePenaltyPerSlot: params.latePenalty,
+    lateHour: 20
   });
 
-  // SA
-  const sa = optimizeSA(scores, {
-    seed: params.seed + 1000,
-    steps: 14000,
-    t0: 2.0,
-    tEnd: 0.02,
-    neighborRadius: Math.max(6, Math.floor(spd / 4))
-  });
+  // Backend payload (FastAPI SolveRequest와 동일 키로 구성)
+  const payload = {
+    num_people: params.numPeople,
+    slot_minutes: params.slotMinutes,
+    meeting_len_slots: meetingLenSlots,
+    availability: state.availability,
+    pref_start_ok: state.prefStartOk,
+    weights: weights,
+    pref_bonus: params.prefBonus,
+    late_hour: 20,
+    late_penalty_per_slot: params.latePenalty
+  };
 
-  const bestStart = sa.bestStart;
-  const bestEnd = bestStart + meetingLenSlots;
+  renderResult("백엔드 계산 중...", true);
 
-  // attendees + pref hits
-  const attendees = [];
-  const prefHits = [];
-  for (let p = 0; p < params.numPeople; p++) {
-    let ok = true;
-    for (let t = bestStart; t < bestEnd; t++) {
-      if (!state.availability[p][t]) { ok = false; break; }
-    }
-    if (ok) {
-      attendees.push(p);
-      if (state.prefStartOk[p][bestStart]) prefHits.push(p);
-    }
+  let resp;
+  try {
+    resp = await callSolveAPI(params.apiBase, payload);
+  } catch (e) {
+    renderResult(`백엔드 호출 실패: ${String(e.message || e)}`, false);
+    return;
   }
 
+  const bestStart = resp.best_start;
+  const bestEnd = resp.best_end;
+
+  // attendees/prefHits는 백엔드 결과 사용
+  const attendees = resp.attendees || [];
+  const prefHits = resp.pref_hit_people || [];
+
+  // local arrays 범위 체크 (혹시 응답이 범위 밖이면 방어)
+  const localScore = (bestStart >= 0 && bestStart < scores.length) ? scores[bestStart] : null;
+  const localCount = (bestStart >= 0 && bestStart < counts.length) ? counts[bestStart] : null;
+  const localWAtt = (bestStart >= 0 && bestStart < wAtt.length) ? wAtt[bestStart] : null;
+  const localWPref = (bestStart >= 0 && bestStart < wPref.length) ? wPref[bestStart] : null;
+  const localLate = (bestStart >= 0 && bestStart < lateOverlap.length) ? lateOverlap[bestStart] : null;
+
   const resultText = [
-    "===== Best Meeting Time (SA) =====",
+    "===== Best Meeting Time (Backend) =====",
     `Start: ${formatDayTime(bestStart, spd, params.slotMinutes)}`,
     `End  : ${formatDayTime(bestEnd, spd, params.slotMinutes)}`,
-    `Score: ${scores[bestStart].toFixed(2)}`,
-    `Unweighted attendees: ${counts[bestStart]}/${params.numPeople}`,
-    `Weighted attendance : ${wAtt[bestStart].toFixed(2)}`,
-    `Weighted pref hits  : ${wPref[bestStart].toFixed(2)} (people: [${prefHits.join(", ")}])`,
-    `Late overlap slots  : ${lateOverlap[bestStart]} (>=20:00)`,
-    `Attendees           : [${attendees.join(", ")}]`
-  ].join("\n");
+    `Score (backend): ${Number(resp.score).toFixed(2)}`,
+    localScore !== null ? `Score (local check): ${localScore.toFixed(2)}` : `Score (local check): -`,
+    localCount !== null ? `Unweighted attendees: ${localCount}/${params.numPeople}` : `Unweighted attendees: -`,
+    localWAtt !== null ? `Weighted attendance : ${localWAtt.toFixed(2)}` : `Weighted attendance : -`,
+    localWPref !== null ? `Weighted pref hits  : ${localWPref.toFixed(2)} (people: [${prefHits.join(", ")}])` : `Weighted pref hits  : -`,
+    localLate !== null ? `Late overlap slots  : ${localLate} (>=20:00)` : `Late overlap slots  : -`,
+    `Attendees           : [${attendees.join(", ")}]`,
+    resp.meta ? `Meta: ${JSON.stringify(resp.meta)}` : ""
+  ].filter(line => line !== "").join("\n");
 
-  renderResult(resultText);
+  renderResult(resultText, false);
 
-  // TopK
+  // TopK 후보 표시
   const idxs = scores.map((v, i) => ({ i, v }))
-    .sort((a,b) => b.v - a.v)
+    .sort((a, b) => b.v - a.v)
     .slice(0, Math.max(3, params.topK));
 
   const topText = idxs.map((x, r) => {
     const s = x.i;
     const e = s + meetingLenSlots;
     return [
-      `${String(r+1).padStart(2," ")}. ${formatDayTime(s, spd, params.slotMinutes)} ~ ${formatDayTime(e, spd, params.slotMinutes)}`,
+      `${String(r + 1).padStart(2, " ")}. ${formatDayTime(s, spd, params.slotMinutes)} ~ ${formatDayTime(e, spd, params.slotMinutes)}`,
       `    score=${scores[s].toFixed(2)}, attend=${counts[s]}/${params.numPeople}, w_att=${wAtt[s].toFixed(2)}, w_pref=${wPref[s].toFixed(2)}, late=${lateOverlap[s]}`
     ].join("\n");
   }).join("\n");
 
-  document.getElementById("topCandidates").textContent = topText;
-}
-
-function renderResult(text) {
-  const el = document.getElementById("result");
-  el.classList.remove("muted");
-  el.textContent = text;
+  renderTopCandidates(topText, false);
 }
 
 // =========================
@@ -443,15 +455,14 @@ document.getElementById("btnGenerate").addEventListener("click", () => {
 
   document.getElementById("dataSummary").classList.remove("muted");
   document.getElementById("dataSummary").textContent = summarizeData(params);
+
   document.getElementById("btnOptimize").disabled = false;
 
-  document.getElementById("result").textContent = "데이터 생성 완료. “최적화 실행 (SA)”을 눌러주세요.";
-  document.getElementById("result").classList.add("muted");
-  document.getElementById("topCandidates").textContent = "-";
-  document.getElementById("topCandidates").classList.add("muted");
+  renderResult("데이터 생성 완료. “최적화 실행 (Backend)”을 눌러주세요.", true);
+  renderTopCandidates("-", true);
 });
 
-document.getElementById("btnOptimize").addEventListener("click", () => {
-  document.getElementById("topCandidates").classList.remove("muted");
-  computeAndRender();
+document.getElementById("btnOptimize").addEventListener("click", async () => {
+  renderTopCandidates("-", true);
+  await computeAndRender();
 });
