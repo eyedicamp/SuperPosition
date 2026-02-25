@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -10,31 +10,30 @@
   <div class="wrap">
     <header class="hero">
       <div class="brand">
-        <div class="badge">Super Position</div>
-        <h1>Super Position</h1>
+        <h1 class="title"><span class="title-emoji" aria-hidden="true">🍟</span> Super Position</h1>
         <p class="subtitle">Quantum Annealing-based Meeting Scheduler</p>
       </div>
     </header>
 
     <section class="card">
       <div class="card-head">
-        <h2>Inputs</h2>
+        <h2>Data</h2>
         <div class="card-actions">
-          <button id="btnViewTimetable" class="ghost" disabled>전체 시간표 확인</button>
+          <button id="btnViewTimetable" class="ghost" disabled>View Timetable</button>
         </div>
       </div>
 
       <div class="split">
         <div class="panel">
-          <h3>랜덤 시간표 생성</h3>
+          <h3>Generate Random Schedule</h3>
           <div class="grid">
             <label>
-              인원 수
+              Number of people
               <input id="numPeople" type="number" min="2" max="60" value="14" />
             </label>
 
             <label>
-              슬롯(분)
+              Slot size (minutes)
               <select id="slotMinutes">
                 <option value="30" selected>30</option>
                 <option value="15">15</option>
@@ -43,39 +42,39 @@
             </label>
 
             <label>
-              랜덤 시드
+              Random seed
               <input id="seed" type="number" value="11" />
             </label>
 
             <div class="inline-note">
-              생성된 시간표는 “전체 시간표 확인”에서 시각화할 수 있습니다.
+              The generated schedule stays available until you generate a new one (and it also survives refresh).
             </div>
           </div>
 
           <div class="btnrow">
-            <button id="btnGenerate" class="primary">랜덤 데이터 생성</button>
+            <button id="btnGenerate" class="primary">Generate</button>
           </div>
         </div>
 
         <div class="panel">
-          <h3>CSV 업로드</h3>
+          <h3>CSV Upload</h3>
           <div class="grid">
             <label>
-              시간표 CSV 파일
+              Timetable CSV file
               <input id="csvFile" type="file" accept=".csv,text/csv" />
             </label>
 
             <label>
-              템플릿 다운로드
+              Template / Load
               <div class="btnrow" style="margin-top:0;">
-                <button id="btnDownloadCsvTemplate" class="ghost">CSV 양식</button>
-                <button id="btnLoadCsv" class="primary">CSV 로드</button>
+                <button id="btnDownloadCsvTemplate" class="ghost">CSV Template</button>
+                <button id="btnLoadCsv" class="primary">Load CSV</button>
               </div>
             </label>
 
             <div class="inline-note">
-              “CSV 양식”은 현재 인원 수/슬롯(분) 설정에 맞는 템플릿을 다운로드합니다.
-              (기본값: 09:00~21:00 available=1, pref=0)
+              “CSV Template” downloads a ready-to-fill file using the current “people / slot size” settings.
+              Default: available=1 for 09:00–21:00, pref=0.
             </div>
           </div>
         </div>
@@ -89,48 +88,53 @@
 
       <div class="grid">
         <label>
-          백엔드 API Base URL
-          <input id="apiBase" type="text" value="https://superposition.onrender.com" />
+          Backend API Base URL
+          <input id="apiBase" type="text" value="https://superposition1.onrender.com" />
         </label>
 
         <label>
-          모임 길이(분)
+          Meeting length (minutes)
           <input id="meetingMinutes" type="number" min="15" step="15" value="180" />
         </label>
 
         <label>
-          선호 구간 길이(분)
+          Preference window length (minutes)
           <input id="prefWindowMinutes" type="number" min="15" step="15" value="120" />
         </label>
 
         <label>
-          선호 보너스 계수 (pref_bonus)
+          Preference bonus (pref_bonus)
           <input id="prefBonus" type="number" min="0" step="0.1" value="0.7" />
         </label>
 
         <label>
-          20:00 이후 슬롯당 패널티 (late_penalty)
+          Late cutoff hour (late_hour, 0–23)
+          <input id="lateHour" type="number" min="0" max="23" step="1" value="20" />
+        </label>
+
+        <label>
+          Late penalty per slot (late_penalty)
           <input id="latePenalty" type="number" min="0" step="0.5" value="3.0" />
         </label>
 
         <label>
-          중요 인원 (예: 0,3)
+          Important people (e.g., 0,3)
           <input id="importantPeople" type="text" value="0,3" />
         </label>
 
         <label>
-          중요 인원 가중치
+          Important weight
           <input id="importantWeight" type="number" min="1" step="0.5" value="3.0" />
         </label>
 
         <label>
-          Top-K 후보 출력
+          Top-K candidates
           <input id="topK" type="number" min="3" max="30" value="8" />
         </label>
       </div>
 
       <div class="btnrow">
-        <button id="btnOptimize" class="primary" disabled>최적화 실행</button>
+        <button id="btnOptimize" class="primary" disabled>Run Optimization</button>
       </div>
     </section>
 
@@ -138,7 +142,7 @@
       <div class="card-head">
         <h2>Data Summary</h2>
       </div>
-      <div id="dataSummary" class="mono muted">아직 데이터가 없습니다. 랜덤 생성 또는 CSV 로드를 해주세요.</div>
+      <div id="dataSummary" class="mono muted">No data yet. Generate random data or load a CSV.</div>
     </section>
 
     <section class="card">
@@ -146,7 +150,7 @@
         <h2>Result</h2>
       </div>
 
-      <div id="result" class="result-box muted">아직 실행 전입니다.</div>
+      <div id="result" class="result-box muted">Not run yet.</div>
 
       <div class="card-head" style="margin-top:14px;">
         <h2>Top Candidates</h2>
