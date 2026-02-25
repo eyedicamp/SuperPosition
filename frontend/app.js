@@ -122,7 +122,7 @@ function computeScores({
   slotMinutes,
   weights,
   prefBonus,
-  lateHour = 20,
+  lateHour,
   latePenaltyPerSlot
 }) {
   const numPeople = availability.length;
@@ -201,12 +201,12 @@ function hhmmToMinutes(hhmm) {
 }
 function parseCsvText(text) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-  if (lines.length < 2) throw new Error("CSV 내용이 비어있습니다.");
+  if (lines.length < 2) throw new Error("CSV is empty.");
 
   const header = lines[0].split(",").map(s => s.trim());
   const required = ["slot_minutes", "person_id", "weight", "day", "time", "available", "pref"];
   for (const col of required) {
-    if (!header.includes(col)) throw new Error(`CSV 헤더에 '${col}' 컬럼이 필요합니다.`);
+    if (!header.includes(col)) throw new Error(`Missing column in header: '${col}'.`);
   }
   const idx = Object.fromEntries(header.map((h, i) => [h, i]));
 
@@ -224,12 +224,12 @@ function parseCsvText(text) {
       pref: Number(parts[idx.pref]),
     });
   }
-  if (rows.length === 0) throw new Error("CSV 데이터 행을 읽지 못했습니다.");
+  if (rows.length === 0) throw new Error("No data rows parsed.");
   return rows;
 }
 function buildScheduleFromRows(rows) {
   const slotMinutes = rows[0].slot_minutes;
-  if (!Number.isFinite(slotMinutes) || slotMinutes <= 0) throw new Error("slot_minutes가 올바르지 않습니다.");
+  if (!Number.isFinite(slotMinutes) || slotMinutes <= 0) throw new Error("Invalid slot_minutes.");
 
   const personSet = new Set(rows.map(r => r.person_id));
   const people = Array.from(personSet).sort((a, b) => a - b);
@@ -246,7 +246,7 @@ function buildScheduleFromRows(rows) {
   const dayIndex = new Map(DAYS.map((d, i) => [d, i]));
 
   for (const r of rows) {
-    if (r.slot_minutes !== slotMinutes) throw new Error("CSV 내 slot_minutes 값이 섞여있습니다(단일 값이어야 함).");
+    if (r.slot_minutes !== slotMinutes) throw new Error("slot_minutes must be a single value (not mixed).");
     if (!dayIndex.has(r.day)) continue;
     const di = dayIndex.get(r.day);
 
@@ -336,7 +336,7 @@ function enableDataButtons(enabled) {
 }
 
 function validateMinutesDivisible(minutes, slotMinutes, label) {
-  if (minutes % slotMinutes !== 0) throw new Error(`${label}(${minutes})는 슬롯(${slotMinutes})으로 나누어 떨어져야 합니다.`);
+  if (minutes % slotMinutes !== 0) throw new Error(`${label} (${minutes}) must be divisible by slot size (${slotMinutes}).`);
 }
 
 function getParams() {
@@ -348,6 +348,7 @@ function getParams() {
     meetingMinutes: Number(document.getElementById("meetingMinutes").value),
     prefWindowMinutes: Number(document.getElementById("prefWindowMinutes").value),
     prefBonus: Number(document.getElementById("prefBonus").value),
+    lateHour: Number(document.getElementById("lateHour").value),
     latePenalty: Number(document.getElementById("latePenalty").value),
     importantPeople: parseCSVIndices(document.getElementById("importantPeople").value),
     importantWeight: Number(document.getElementById("importantWeight").value),
@@ -391,27 +392,59 @@ function persistSchedule(extra = {}) {
     availability: state.availability,
     prefStartOk: state.prefStartOk,
   };
-  // ✅ 둘 다 저장 (환경에 따라 localStorage가 제한되는 경우 대비)
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+}
+
+function loadPersistedSchedule() {
+  const raw = sessionStorage.getItem(STORAGE_KEY) || localStorage.getItem(STORAGE_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function restoreFromPersistedSchedule(sched) {
+  state.slotMinutes = sched.slotMinutes;
+  state.people = sched.people;
+  state.availability = sched.availability;
+  state.prefStartOk = sched.prefStartOk;
+  state.weightsBase = sched.weights || Array(sched.people.length).fill(1.0);
+  state.spd = slotsPerDay(sched.slotMinutes);
+  state.totalSlots = 7 * state.spd;
+
+  // reflect UI to match the loaded schedule
+  const slotEl = document.getElementById("slotMinutes");
+  const numEl = document.getElementById("numPeople");
+  if (slotEl) slotEl.value = String(state.slotMinutes);
+  if (numEl) numEl.value = String(state.people.length);
+
+  setDataSummary(summarizeSchedule(), false);
+  enableDataButtons(true);
+
+  renderResult("A saved schedule was loaded. You can view the timetable or run optimization.", true);
+  renderTopCandidates("-", true);
 }
 
 // Optimize backend
 async function optimizeBackend() {
   if (!state.availability) {
-    renderResult("데이터가 없습니다. 랜덤 생성 또는 CSV 로드를 해주세요.", false);
+    renderResult("No data. Generate random data or load a CSV first.", false);
     return;
   }
 
   const params = getParams();
   if (!params.apiBase) {
-    renderResult("백엔드 API Base URL이 비어있습니다.", false);
+    renderResult("Backend API Base URL is empty.", false);
+    return;
+  }
+
+  if (!Number.isFinite(params.lateHour) || params.lateHour < 0 || params.lateHour > 23) {
+    renderResult("Late cutoff hour must be between 0 and 23.", false);
     return;
   }
 
   try {
-    validateMinutesDivisible(params.meetingMinutes, state.slotMinutes, "모임 길이(분)");
-    validateMinutesDivisible(params.prefWindowMinutes, state.slotMinutes, "선호 구간 길이(분)");
+    validateMinutesDivisible(params.meetingMinutes, state.slotMinutes, "Meeting length (minutes)");
+    validateMinutesDivisible(params.prefWindowMinutes, state.slotMinutes, "Preference window length (minutes)");
   } catch (e) {
     renderResult(String(e.message || e), false);
     return;
@@ -433,8 +466,8 @@ async function optimizeBackend() {
     slotMinutes: state.slotMinutes,
     weights,
     prefBonus: params.prefBonus,
-    latePenaltyPerSlot: params.latePenalty,
-    lateHour: 20
+    lateHour: params.lateHour,
+    latePenaltyPerSlot: params.latePenalty
   });
 
   const payload = {
@@ -445,18 +478,18 @@ async function optimizeBackend() {
     pref_start_ok: state.prefStartOk,
     weights: weights,
     pref_bonus: params.prefBonus,
-    late_hour: 20,
+    late_hour: params.lateHour,
     late_penalty_per_slot: params.latePenalty
   };
 
-  renderResult("계산 중...", true);
+  renderResult("Running...", true);
   renderTopCandidates("-", true);
 
   let resp;
   try {
     resp = await callSolveAPI(params.apiBase, payload);
   } catch (e) {
-    renderResult(`백엔드 호출 실패: ${String(e.message || e)}`, false);
+    renderResult(`Backend request failed: ${String(e.message || e)}`, false);
     return;
   }
 
@@ -467,12 +500,12 @@ async function optimizeBackend() {
 
   renderResult(
     [
-      `Best Start: ${formatDayTime(bestStart, state.spd, state.slotMinutes)}`,
-      `Best End  : ${formatDayTime(bestEnd, state.spd, state.slotMinutes)}`,
-      `Score     : ${Number(resp.score).toFixed(2)}`,
-      `Attendees : ${attendees.length}/${state.people.length}  [${attendees.join(", ")}]`,
-      prefHits.length ? `Pref hits : [${prefHits.join(", ")}]` : `Pref hits : -`,
-      resp.meta ? `Meta      : ${JSON.stringify(resp.meta)}` : ""
+      `Best Start : ${formatDayTime(bestStart, state.spd, state.slotMinutes)}`,
+      `Best End   : ${formatDayTime(bestEnd, state.spd, state.slotMinutes)}`,
+      `Score      : ${Number(resp.score).toFixed(2)}`,
+      `Attendees  : ${attendees.length}/${state.people.length}  [${attendees.join(", ")}]`,
+      prefHits.length ? `Pref hits  : [${prefHits.join(", ")}]` : `Pref hits  : -`,
+      resp.meta ? `Meta       : ${JSON.stringify(resp.meta)}` : ""
     ].filter(Boolean).join("\n"),
     false
   );
@@ -508,7 +541,6 @@ function buildTemplateSchedule(numPeople, slotMinutes) {
   const people = Array.from({ length: numPeople }, (_, i) => i);
   const weights = Array(numPeople).fill(1.0);
 
-  // 기본: 09:00~21:00만 available=1
   const startHour = 9;
   const endHour = 21;
   for (let d = 0; d < 7; d++) {
@@ -554,17 +586,17 @@ document.getElementById("btnGenerate").addEventListener("click", () => {
   setDataSummary(summarizeSchedule(), false);
   enableDataButtons(true);
 
-  renderResult("데이터 준비 완료. 최적화를 실행하세요.", true);
+  renderResult("Random schedule generated. You can view the timetable or run optimization.", true);
   renderTopCandidates("-", true);
 
-  // ✅ 생성 직후에도 저장
+  // persist so it survives navigation/refresh
   persistSchedule();
 });
 
 document.getElementById("btnLoadCsv").addEventListener("click", async () => {
   const file = document.getElementById("csvFile").files?.[0];
   if (!file) {
-    renderResult("CSV 파일을 선택해주세요.", false);
+    renderResult("Please choose a CSV file first.", false);
     return;
   }
 
@@ -587,12 +619,12 @@ document.getElementById("btnLoadCsv").addEventListener("click", async () => {
     setDataSummary(summarizeSchedule(), false);
     enableDataButtons(true);
 
-    renderResult("CSV 로드 완료. 최적화를 실행하세요.", true);
+    renderResult("CSV loaded. You can view the timetable or run optimization.", true);
     renderTopCandidates("-", true);
 
     persistSchedule({ weights: built.weights });
   } catch (e) {
-    renderResult(`CSV 로드 실패: ${String(e.message || e)}`, false);
+    renderResult(`CSV load failed: ${String(e.message || e)}`, false);
   }
 });
 
@@ -623,6 +655,12 @@ document.getElementById("btnDownloadCsvTemplate").addEventListener("click", () =
 
 // init
 enableDataButtons(false);
-setDataSummary("아직 데이터가 없습니다. 랜덤 생성 또는 CSV 로드를 해주세요.", true);
-renderResult("아직 실행 전입니다.", true);
+setDataSummary("No data yet. Generate random data or load a CSV.", true);
+renderResult("Not run yet.", true);
 renderTopCandidates("-", true);
+
+// ✅ Restore persisted schedule on load (fix: data remains after Back / refresh)
+const saved = loadPersistedSchedule();
+if (saved && saved.availability && saved.prefStartOk && saved.people && saved.slotMinutes) {
+  restoreFromPersistedSchedule(saved);
+}
