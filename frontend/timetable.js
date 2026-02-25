@@ -12,10 +12,7 @@ function hhmm(minutes) {
 }
 
 function loadSchedule() {
-  // ✅ sessionStorage 우선, 없으면 localStorage
-  const raw1 = sessionStorage.getItem(STORAGE_KEY);
-  const raw2 = localStorage.getItem(STORAGE_KEY);
-  const raw = raw1 || raw2;
+  const raw = sessionStorage.getItem(STORAGE_KEY) || localStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
 }
@@ -84,7 +81,6 @@ function renderGrid(gridWrap, sched, dayIdx) {
 
   gridWrap.innerHTML = "";
 
-  // header row
   const header = document.createElement("div");
   header.className = "gridrow header";
   header.style.gridTemplateColumns = colTemplate;
@@ -102,7 +98,6 @@ function renderGrid(gridWrap, sched, dayIdx) {
   });
   gridWrap.appendChild(header);
 
-  // person rows
   for (let pi = 0; pi < people.length; pi++) {
     const row = document.createElement("div");
     row.className = "gridrow";
@@ -138,7 +133,7 @@ const sched = loadSchedule();
 
 const btnBack = document.getElementById("btnBack");
 btnBack.addEventListener("click", () => {
-  // ✅ /frontend/ 로 이동
+  // go back to /frontend/
   window.location.href = "./";
 });
 
