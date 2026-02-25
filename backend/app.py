@@ -1,26 +1,32 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 
-app = FastAPI()
+app = FastAPI(title="Meeting Optimizer API", version="0.1.0")
 
-# GitHub Pages에서 호출할 것이므로 CORS 허용 필요
+# ✅ CORS
+# - allow_origins="*" 를 쓰려면 allow_credentials는 반드시 False여야 안전합니다.
+# - 운영에서는 GitHub Pages 도메인으로 좁히는 것을 권장합니다.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 운영에서는 GitHub Pages 도메인만 넣는 것을 권장
-    allow_credentials=True,
+    allow_origins=["*"],          # 운영 시: ["https://<username>.github.io", "https://<username>.github.io/<repo>"] 로 변경 권장
+    allow_credentials=False,      # ✅ 핵심: "*" 와 같이 쓰려면 False
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ✅ Render 헬스체크/접속 확인용
+@app.get("/")
+def health():
+    return {"status": "ok"}
+
 class SolveRequest(BaseModel):
-    # 예시: 실제로는 당신이 만든 프론트 입력 스키마에 맞춰 확정
     num_people: int
     slot_minutes: int
     meeting_len_slots: int
-    availability: List[List[bool]]          # [P][T]
-    pref_start_ok: List[List[bool]]         # [P][T] (시작시간이 선호 구간이면 True)
+    availability: List[List[bool]]      # [P][T]
+    pref_start_ok: List[List[bool]]     # [P][T] (시작시간이 선호 구간이면 True)
     weights: List[float]
     pref_bonus: float = 0.7
     late_hour: int = 20
@@ -35,17 +41,18 @@ class SolveResponse(BaseModel):
     meta: Dict[str, Any] = {}
 
 def solve_with_simulated_annealing(payload: SolveRequest) -> SolveResponse:
-    # TODO: 여기에 지금 Colab에서 만든 SA(또는 neal 기반 BQM)를 그대로 이식
-    # 지금은 형태만 맞춘 더미 예시
+    # 현재는 점수 최대(브루트포스)로 구현되어 있음
+    # 나중에 neal(BQM) 또는 QA로 교체하려면 이 함수 내부만 바꾸면 됨
     T = len(payload.availability[0])
     max_start = T - payload.meeting_len_slots
+
     best_start = 0
     best_score = -1e18
 
-    # 여기만 나중에 QA로 쉽게 교체 가능하게 "solver" 함수로 분리해두는 게 핵심
     for s in range(max_start):
-        # score 계산(간단 버전)
         score = 0.0
+
+        # 참석 + 선호 보너스
         for p in range(payload.num_people):
             ok = True
             for t in range(s, s + payload.meeting_len_slots):
@@ -57,13 +64,15 @@ def solve_with_simulated_annealing(payload: SolveRequest) -> SolveResponse:
                 if payload.pref_start_ok[p][s]:
                     score += payload.pref_bonus * payload.weights[p]
 
-        # late penalty
+        # 늦은 시간 패널티
         slots_per_day = int(24 * 60 / payload.slot_minutes)
         late_slot_in_day = int(payload.late_hour * (60 / payload.slot_minutes))
+
         overlap = 0
         for t in range(s, s + payload.meeting_len_slots):
             if (t % slots_per_day) >= late_slot_in_day:
                 overlap += 1
+
         score -= payload.late_penalty_per_slot * overlap
 
         if score > best_score:
