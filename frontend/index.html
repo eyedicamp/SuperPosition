@@ -48,7 +48,7 @@
             </label>
 
             <div class="inline-note">
-              생성된 데이터는 “전체 시간표 확인”에서 시각화할 수 있습니다.
+              생성된 시간표는 “전체 시간표 확인”에서 시각화할 수 있습니다.
             </div>
           </div>
 
@@ -66,17 +66,17 @@
             </label>
 
             <label>
-              CSV 포맷
-              <div class="inline-note">
-                헤더 포함, 컬럼:
-                <span class="mono">slot_minutes,person_id,weight,day,time,available,pref</span><br/>
-                day: Mon..Sun, time: HH:MM(슬롯 시작), available/pref: 0 또는 1
+              템플릿 다운로드
+              <div class="btnrow" style="margin-top:0;">
+                <button id="btnDownloadCsvTemplate" class="ghost">CSV 양식</button>
+                <button id="btnLoadCsv" class="primary">CSV 로드</button>
               </div>
             </label>
-          </div>
 
-          <div class="btnrow">
-            <button id="btnLoadCsv" class="primary">CSV 로드</button>
+            <div class="inline-note">
+              “CSV 양식”은 현재 인원 수/슬롯(분) 설정에 맞는 템플릿을 다운로드합니다.
+              (기본값: 09:00~21:00 available=1, pref=0)
+            </div>
           </div>
         </div>
       </div>
