@@ -1,50 +1,179 @@
-<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Super Position — Timetable</title>
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <div class="wrap">
-    <header class="hero">
-      <div class="brand">
-        <div class="badge">Super Position</div>
-        <h1>Timetable</h1>
-        <p class="subtitle">View schedules by person (availability + preference)</p>
-      </div>
-      <div class="card-actions">
-        <button id="btnBack" class="ghost">← Back</button>
-        <button id="btnDownload" class="primary" disabled>시간표 다운로드 (CSV)</button>
-      </div>
-    </header>
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const STORAGE_KEY = "sp_schedule_v1";
 
-    <section class="card">
-      <div class="card-head">
-        <h2>Day</h2>
-      </div>
-      <div id="dayTabs" class="tabs"></div>
-    </section>
+function slotsPerDay(slotMinutes) {
+  return Math.floor(24 * 60 / slotMinutes);
+}
 
-    <section class="card">
-      <div class="card-head">
-        <h2>Grid</h2>
-      </div>
+function hhmm(minutes) {
+  const hh = Math.floor(minutes / 60);
+  const mm = minutes % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
 
-      <div id="emptyState" class="muted" style="display:none;">
-        데이터가 없습니다. 메인 페이지에서 랜덤 생성 또는 CSV 로드를 먼저 진행하세요.
-      </div>
+function loadSchedule() {
+  // ✅ sessionStorage 우선, 없으면 localStorage
+  const raw1 = sessionStorage.getItem(STORAGE_KEY);
+  const raw2 = localStorage.getItem(STORAGE_KEY);
+  const raw = raw1 || raw2;
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
 
-      <div id="gridWrap" class="gridwrap" style="display:none;"></div>
+function scheduleToCsv({ slotMinutes, people, weights, availability, prefStartOk }) {
+  const spd = slotsPerDay(slotMinutes);
+  const header = "slot_minutes,person_id,weight,day,time,available,pref";
+  const lines = [header];
 
-      <div class="inline-note" style="margin-top:12px;">
-        <b>색상:</b>
-        흰색=가능, 회색=불가, <span style="background:var(--y); padding:2px 6px; border-radius:8px; border:1px solid rgba(27,27,31,.12);">노랑</span>=선호(해당 슬롯 시작)
-      </div>
-    </section>
-  </div>
+  for (let pi = 0; pi < people.length; pi++) {
+    const personId = people[pi];
+    const w = weights?.[pi] ?? 1.0;
 
-  <script src="timetable.js"></script>
-</body>
-</html>
+    for (let di = 0; di < 7; di++) {
+      for (let within = 0; within < spd; within++) {
+        const t = di * spd + within;
+        const time = hhmm(within * slotMinutes);
+        const a = availability[pi][t] ? 1 : 0;
+        const p = prefStartOk[pi][t] ? 1 : 0;
+        lines.push(`${slotMinutes},${personId},${w},${DAYS[di]},${time},${a},${p}`);
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function renderTabs(container, onSelect) {
+  container.innerHTML = "";
+  DAYS.forEach((d, i) => {
+    const btn = document.createElement("button");
+    btn.className = "tab";
+    btn.textContent = d;
+    btn.addEventListener("click", () => onSelect(i));
+    container.appendChild(btn);
+  });
+}
+function setActiveTab(container, idx) {
+  const buttons = Array.from(container.querySelectorAll(".tab"));
+  buttons.forEach((b, i) => b.classList.toggle("active", i === idx));
+}
+
+function renderGrid(gridWrap, sched, dayIdx) {
+  const slotMinutes = sched.slotMinutes;
+  const spd = slotsPerDay(slotMinutes);
+  const cols = spd;
+
+  const people = sched.people;
+  const availability = sched.availability;
+  const pref = sched.prefStartOk;
+  const weights = sched.weights || [];
+
+  const times = Array.from({ length: cols }, (_, k) => hhmm(k * slotMinutes));
+  const colTemplate = `220px repeat(${cols}, 46px)`;
+
+  gridWrap.innerHTML = "";
+
+  // header row
+  const header = document.createElement("div");
+  header.className = "gridrow header";
+  header.style.gridTemplateColumns = colTemplate;
+
+  const h0 = document.createElement("div");
+  h0.className = "cell sticky headcell";
+  h0.textContent = "Person";
+  header.appendChild(h0);
+
+  times.forEach(t => {
+    const c = document.createElement("div");
+    c.className = "cell headcell";
+    c.textContent = t;
+    header.appendChild(c);
+  });
+  gridWrap.appendChild(header);
+
+  // person rows
+  for (let pi = 0; pi < people.length; pi++) {
+    const row = document.createElement("div");
+    row.className = "gridrow";
+    row.style.gridTemplateColumns = colTemplate;
+
+    const label = document.createElement("div");
+    label.className = "cell sticky personcell";
+    const w = weights[pi] ?? 1.0;
+    label.textContent = `#${pi} (id:${people[pi]})${w > 1 ? ` ★x${w}` : ""}`;
+    row.appendChild(label);
+
+    for (let within = 0; within < cols; within++) {
+      const tGlobal = dayIdx * spd + within;
+
+      const cell = document.createElement("div");
+      cell.className = "cell slotcell";
+
+      const isAvail = !!availability[pi][tGlobal];
+      const isPref = !!pref[pi][tGlobal];
+
+      if (!isAvail) cell.classList.add("busy");
+      if (isPref) cell.classList.add("pref");
+
+      row.appendChild(cell);
+    }
+
+    gridWrap.appendChild(row);
+  }
+}
+
+// main
+const sched = loadSchedule();
+
+const btnBack = document.getElementById("btnBack");
+btnBack.addEventListener("click", () => {
+  // ✅ /frontend/ 로 이동
+  window.location.href = "./";
+});
+
+const btnDownload = document.getElementById("btnDownload");
+const dayTabs = document.getElementById("dayTabs");
+const gridWrap = document.getElementById("gridWrap");
+const emptyState = document.getElementById("emptyState");
+
+if (!sched || !sched.availability || !sched.prefStartOk || !sched.people || !sched.slotMinutes) {
+  emptyState.style.display = "block";
+  gridWrap.style.display = "none";
+  btnDownload.disabled = true;
+} else {
+  emptyState.style.display = "none";
+  gridWrap.style.display = "block";
+  btnDownload.disabled = false;
+
+  let currentDay = 0;
+  renderTabs(dayTabs, (idx) => {
+    currentDay = idx;
+    setActiveTab(dayTabs, currentDay);
+    renderGrid(gridWrap, sched, currentDay);
+  });
+
+  setActiveTab(dayTabs, currentDay);
+  renderGrid(gridWrap, sched, currentDay);
+
+  btnDownload.addEventListener("click", () => {
+    const csv = scheduleToCsv({
+      slotMinutes: sched.slotMinutes,
+      people: sched.people,
+      weights: sched.weights,
+      availability: sched.availability,
+      prefStartOk: sched.prefStartOk
+    });
+    downloadTextFile(`super_position_timetable_slot${sched.slotMinutes}.csv`, csv);
+  });
+}
