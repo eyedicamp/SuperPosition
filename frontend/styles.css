@@ -52,9 +52,16 @@ body{
 }
 
 .title-emoji{
-  display:inline-flex;
-  transform: translateY(-2px);
+  display:inline-block;
   margin-right: 10px;
+  transform: translateY(-2px);
+
+  color: #1b1b1f;
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  -webkit-text-fill-color: #1b1b1f;
+
   filter: drop-shadow(0 8px 14px rgba(27,27,31,.15));
 }
 
@@ -253,3 +260,4 @@ button:disabled{
   background: linear-gradient(180deg, rgba(255,216,77,.95), rgba(255,242,191,.55));
   border: 1px solid rgba(27,27,31,.10);
 }
+
