@@ -38,20 +38,27 @@ body{
   margin-bottom:12px;
 }
 
-.brand .badge{
-  display:inline-flex;
-  align-items:center;
-  padding:6px 10px;
-  border-radius:999px;
-  border:1px solid rgba(27,27,31,.12);
-  background: linear-gradient(180deg, var(--y-soft), #ffffff);
-  font-weight:800;
-  width:fit-content;
-  margin-bottom:10px;
+.title{
+  margin:0;
+  font-size: 40px;
+  letter-spacing: -0.8px;
+  line-height: 1.05;
+  font-weight: 900;
+  background: linear-gradient(90deg, #1b1b1f 0%, #1b1b1f 45%, #b07a00 65%, #ffbf1a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 10px 24px rgba(27,27,31,.10);
 }
 
-.brand h1{ margin:0; font-size:34px; letter-spacing:-.4px; }
-.subtitle{ margin:6px 0 0 0; color:var(--muted); }
+.title-emoji{
+  display:inline-flex;
+  transform: translateY(-2px);
+  margin-right: 10px;
+  filter: drop-shadow(0 8px 14px rgba(27,27,31,.15));
+}
+
+.subtitle{ margin:8px 0 0 0; color:var(--muted); }
 
 .card{
   background: var(--card);
