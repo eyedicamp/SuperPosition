@@ -1,8 +1,12 @@
 // =========================
-// Time utilities
+// Shared constants / storage
 // =========================
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const STORAGE_KEY = "sp_schedule_v1";
 
+// =========================
+// Time utilities
+// =========================
 function slotsPerDay(slotMinutes) {
   return Math.floor(24 * 60 / slotMinutes);
 }
@@ -126,9 +130,7 @@ function generateRandomPreferences({
 }
 
 // =========================
-// Score computation (for Top-K display only)
-// (Backend도 동일한 스코어를 사용한다고 가정)
-// score[s] = Σ w_p * a_{p,s} + prefBonus*Σ w_p*a_{p,s}*b_{p,s} - latePenaltyPerSlot*lateOverlap(s)
+// Score computation (Top-K display)
 // =========================
 function computeScores({
   availability,
@@ -194,7 +196,7 @@ function computeScores({
 function getApiBase() {
   const raw = (document.getElementById("apiBase")?.value || "").trim();
   if (!raw) return "";
-  return raw.replace(/\/+$/, ""); // trailing slash 제거
+  return raw.replace(/\/+$/, "");
 }
 
 async function callSolveAPI(apiBase, payload) {
@@ -212,72 +214,141 @@ async function callSolveAPI(apiBase, payload) {
 }
 
 // =========================
-// UI state
+// CSV parsing / generation
+// Columns: slot_minutes,person_id,weight,day,time,available,pref
+// day: Mon..Sun, time: HH:MM
+// =========================
+function parseCsvText(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length < 2) throw new Error("CSV 내용이 비어있습니다.");
+
+  const header = lines[0].split(",").map(s => s.trim());
+  const required = ["slot_minutes", "person_id", "weight", "day", "time", "available", "pref"];
+  for (const col of required) {
+    if (!header.includes(col)) throw new Error(`CSV 헤더에 '${col}' 컬럼이 필요합니다.`);
+  }
+
+  const idx = Object.fromEntries(header.map((h, i) => [h, i]));
+
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split(",").map(s => s.trim());
+    if (parts.length !== header.length) continue; // 방어적으로 스킵
+    rows.push({
+      slot_minutes: Number(parts[idx.slot_minutes]),
+      person_id: Number(parts[idx.person_id]),
+      weight: Number(parts[idx.weight]),
+      day: parts[idx.day],
+      time: parts[idx.time],
+      available: Number(parts[idx.available]),
+      pref: Number(parts[idx.pref]),
+    });
+  }
+
+  if (rows.length === 0) throw new Error("CSV 데이터 행을 읽지 못했습니다.");
+  return rows;
+}
+
+function hhmmToMinutes(hhmm) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!(hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59)) return null;
+  return hh * 60 + mm;
+}
+
+function buildScheduleFromRows(rows) {
+  const slotMinutes = rows[0].slot_minutes;
+  if (!Number.isFinite(slotMinutes) || slotMinutes <= 0) throw new Error("slot_minutes가 올바르지 않습니다.");
+
+  // unique persons
+  const personSet = new Set(rows.map(r => r.person_id));
+  const people = Array.from(personSet).sort((a, b) => a - b);
+  const numPeople = people.length;
+
+  const spd = slotsPerDay(slotMinutes);
+  const totalSlots = 7 * spd;
+
+  // maps person_id -> row index
+  const pIndex = new Map(people.map((pid, i) => [pid, i]));
+
+  const availability = Array.from({ length: numPeople }, () => Array(totalSlots).fill(false));
+  const prefStartOk = Array.from({ length: numPeople }, () => Array(totalSlots).fill(false));
+  const weights = Array(numPeople).fill(1.0);
+
+  const dayIndex = new Map(DAYS.map((d, i) => [d, i]));
+
+  for (const r of rows) {
+    if (r.slot_minutes !== slotMinutes) throw new Error("CSV 내 slot_minutes 값이 섞여있습니다(단일 값이어야 함).");
+    if (!dayIndex.has(r.day)) continue;
+    const di = dayIndex.get(r.day);
+
+    const mins = hhmmToMinutes(r.time);
+    if (mins === null) continue;
+
+    const within = Math.floor(mins / slotMinutes);
+    if (within < 0 || within >= spd) continue;
+
+    const t = di * spd + within;
+    const pi = pIndex.get(r.person_id);
+    if (pi === undefined) continue;
+
+    availability[pi][t] = (r.available === 1);
+    prefStartOk[pi][t] = (r.pref === 1);
+
+    if (Number.isFinite(r.weight) && r.weight > 0) {
+      weights[pi] = r.weight;
+    }
+  }
+
+  return { slotMinutes, numPeople, spd, totalSlots, availability, prefStartOk, weights, people };
+}
+
+function scheduleToCsv({
+  slotMinutes,
+  people,
+  weights,
+  availability,
+  prefStartOk
+}) {
+  const spd = slotsPerDay(slotMinutes);
+  const header = "slot_minutes,person_id,weight,day,time,available,pref";
+  const lines = [header];
+
+  for (let pi = 0; pi < people.length; pi++) {
+    const personId = people[pi];
+    const w = weights[pi] ?? 1.0;
+
+    for (let di = 0; di < 7; di++) {
+      for (let within = 0; within < spd; within++) {
+        const t = di * spd + within;
+        const minutes = within * slotMinutes;
+        const hh = Math.floor(minutes / 60);
+        const mm = minutes % 60;
+        const time = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+        const a = availability[pi][t] ? 1 : 0;
+        const p = prefStartOk[pi][t] ? 1 : 0;
+        lines.push(`${slotMinutes},${personId},${w},${DAYS[di]},${time},${a},${p}`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+// =========================
+// UI state + helpers
 // =========================
 let state = {
+  slotMinutes: null,
+  people: null,          // 실제 person_id 배열(업로드 대비)
   availability: null,
   prefStartOk: null,
+  weightsBase: null,     // CSV 로드 시 weight(또는 1)
   spd: null,
   totalSlots: null,
-  weights: null,
-  lastParams: null
 };
-
-function readParams() {
-  const apiBase = getApiBase();
-
-  const numPeople = Number(document.getElementById("numPeople").value);
-  const slotMinutes = Number(document.getElementById("slotMinutes").value);
-
-  const meetingMinutes = Number(document.getElementById("meetingMinutes").value);
-  const prefWindowMinutes = Number(document.getElementById("prefWindowMinutes").value);
-
-  const prefBonus = Number(document.getElementById("prefBonus").value);
-  const latePenalty = Number(document.getElementById("latePenalty").value);
-
-  const importantPeople = parseCSVIndices(document.getElementById("importantPeople").value);
-  const importantWeight = Number(document.getElementById("importantWeight").value);
-
-  const seed = Number(document.getElementById("seed").value);
-  const topK = Number(document.getElementById("topK").value);
-
-  return {
-    apiBase,
-    numPeople, slotMinutes, meetingMinutes, prefWindowMinutes,
-    prefBonus, latePenalty, importantPeople, importantWeight,
-    seed, topK
-  };
-}
-
-function summarizeData(params) {
-  const { numPeople, slotMinutes, meetingMinutes, prefWindowMinutes, importantPeople, importantWeight } = params;
-  const spd = state.spd;
-
-  const totalSlots = state.totalSlots;
-  let freeRatioSum = 0;
-  for (let p = 0; p < numPeople; p++) {
-    let free = 0;
-    for (let t = 0; t < totalSlots; t++) if (state.availability[p][t]) free++;
-    freeRatioSum += free / totalSlots;
-  }
-  const avgFree = freeRatioSum / numPeople;
-
-  const prefSamples = [];
-  for (let p = 0; p < Math.min(numPeople, 6); p++) {
-    const idx = state.prefStartOk[p].findIndex(v => v);
-    prefSamples.push(`${p}: ${idx >= 0 ? formatDayTime(idx, spd, slotMinutes) : "-"}`);
-  }
-
-  return [
-    `People: ${numPeople}`,
-    `Slot minutes: ${slotMinutes}`,
-    `Meeting length: ${meetingMinutes} min`,
-    `Preferred window length: ${prefWindowMinutes} min`,
-    `Important people: [${importantPeople.join(", ")}], important_weight=${importantWeight}`,
-    `Avg free ratio (random data): ${(avgFree * 100).toFixed(1)}%`,
-    `Preference start samples: ${prefSamples.join(" | ")}`
-  ].join("\n");
-}
 
 function renderResult(text, muted = false) {
   const el = document.getElementById("result");
@@ -291,74 +362,149 @@ function renderTopCandidates(text, muted = false) {
   el.classList.toggle("muted", muted);
 }
 
+function setDataSummary(text, muted = false) {
+  const el = document.getElementById("dataSummary");
+  el.textContent = text;
+  el.classList.toggle("muted", muted);
+}
+
+function enableDataButtons(enabled) {
+  document.getElementById("btnOptimize").disabled = !enabled;
+  document.getElementById("btnViewTimetable").disabled = !enabled;
+}
+
 function validateMinutesDivisible(minutes, slotMinutes, label) {
   if (minutes % slotMinutes !== 0) {
     throw new Error(`${label}(${minutes})는 슬롯(${slotMinutes})으로 나누어 떨어져야 합니다.`);
   }
 }
 
+function getParams() {
+  const apiBase = getApiBase();
+
+  const numPeople = Number(document.getElementById("numPeople").value);
+  const slotMinutes = Number(document.getElementById("slotMinutes").value);
+  const seed = Number(document.getElementById("seed").value);
+
+  const meetingMinutes = Number(document.getElementById("meetingMinutes").value);
+  const prefWindowMinutes = Number(document.getElementById("prefWindowMinutes").value);
+
+  const prefBonus = Number(document.getElementById("prefBonus").value);
+  const latePenalty = Number(document.getElementById("latePenalty").value);
+
+  const importantPeople = parseCSVIndices(document.getElementById("importantPeople").value);
+  const importantWeight = Number(document.getElementById("importantWeight").value);
+
+  const topK = Number(document.getElementById("topK").value);
+
+  return {
+    apiBase,
+    numPeople,
+    slotMinutes,
+    seed,
+    meetingMinutes,
+    prefWindowMinutes,
+    prefBonus,
+    latePenalty,
+    importantPeople,
+    importantWeight,
+    topK
+  };
+}
+
+function summarizeSchedule() {
+  const slotMinutes = state.slotMinutes;
+  const spd = state.spd;
+  const totalSlots = state.totalSlots;
+  const numPeople = state.people.length;
+
+  let freeRatioSum = 0;
+  for (let p = 0; p < numPeople; p++) {
+    let free = 0;
+    for (let t = 0; t < totalSlots; t++) if (state.availability[p][t]) free++;
+    freeRatioSum += free / totalSlots;
+  }
+  const avgFree = freeRatioSum / numPeople;
+
+  let prefCount = 0;
+  for (let p = 0; p < numPeople; p++) {
+    for (let t = 0; t < totalSlots; t++) if (state.prefStartOk[p][t]) prefCount++;
+  }
+
+  return [
+    `People: ${numPeople}`,
+    `Slot minutes: ${slotMinutes}`,
+    `Total slots (week): ${totalSlots} (= 7 * ${spd})`,
+    `Avg availability ratio: ${(avgFree * 100).toFixed(1)}%`,
+    `Preferred slots (total): ${prefCount}`
+  ].join("\n");
+}
+
+function persistToLocalStorage(extra = {}) {
+  const payload = {
+    version: 1,
+    saved_at: new Date().toISOString(),
+    slotMinutes: state.slotMinutes,
+    people: state.people,
+    weights: extra.weights ?? state.weightsBase,
+    availability: state.availability,
+    prefStartOk: state.prefStartOk,
+    ...extra,
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+}
+
 // =========================
-// Main: generate + optimize
+// Main: Optimize (Backend) + TopK display
 // =========================
-async function computeAndRender() {
-  const params = readParams();
+async function optimizeBackend() {
+  if (!state.availability) {
+    renderResult("데이터가 없습니다. 랜덤 생성 또는 CSV 로드를 해주세요.", false);
+    return;
+  }
+
+  const params = getParams();
   if (!params.apiBase) {
     renderResult("백엔드 API Base URL이 비어있습니다.", false);
     return;
   }
-  if (!state.availability || !state.prefStartOk) return;
-
-  const spd = state.spd;
-  const totalSlots = state.totalSlots;
 
   try {
-    validateMinutesDivisible(params.meetingMinutes, params.slotMinutes, "모임 길이(분)");
-    validateMinutesDivisible(params.prefWindowMinutes, params.slotMinutes, "선호 구간 길이(분)");
+    validateMinutesDivisible(params.meetingMinutes, state.slotMinutes, "모임 길이(분)");
+    validateMinutesDivisible(params.prefWindowMinutes, state.slotMinutes, "선호 구간 길이(분)");
   } catch (e) {
     renderResult(String(e.message || e), false);
     return;
   }
 
-  const meetingLenSlots = params.meetingMinutes / params.slotMinutes;
-  const prefWindowSlots = params.prefWindowMinutes / params.slotMinutes;
+  const meetingLenSlots = params.meetingMinutes / state.slotMinutes;
 
-  if (meetingLenSlots <= 0) {
-    renderResult("meetingMinutes가 slotMinutes보다 작습니다.", false);
-    return;
-  }
-  if (meetingLenSlots >= totalSlots) {
-    renderResult("meeting length가 전체 주간 슬롯보다 큽니다.", false);
-    return;
-  }
-  if (prefWindowSlots <= 0) {
-    renderResult("prefWindowMinutes가 slotMinutes보다 작습니다.", false);
-    return;
-  }
+  // weights: base + override(important)
+  const weights = Array(state.people.length).fill(1.0);
+  for (let i = 0; i < weights.length; i++) weights[i] = (state.weightsBase?.[i] ?? 1.0);
 
-  // weights
-  const weights = Array(params.numPeople).fill(1.0);
   for (const p of params.importantPeople) {
-    if (p >= 0 && p < params.numPeople) weights[p] = params.importantWeight;
+    // importantPeople는 "사람 인덱스" 기준(현재 UI는 0..N-1로 사용)
+    if (p >= 0 && p < weights.length) weights[p] = params.importantWeight;
   }
-  state.weights = weights;
 
-  // (Top-K 표시용) 로컬에서 동일 score 계산
+  // Top-K(표시용 로컬 스코어)
   const { scores, counts, wAtt, wPref, lateOverlap } = computeScores({
     availability: state.availability,
     prefStartOk: state.prefStartOk,
     meetingLenSlots,
-    spd,
-    slotMinutes: params.slotMinutes,
+    spd: state.spd,
+    slotMinutes: state.slotMinutes,
     weights,
     prefBonus: params.prefBonus,
     latePenaltyPerSlot: params.latePenalty,
     lateHour: 20
   });
 
-  // Backend payload (FastAPI SolveRequest와 동일 키로 구성)
+  // Backend payload
   const payload = {
-    num_people: params.numPeople,
-    slot_minutes: params.slotMinutes,
+    num_people: state.people.length,
+    slot_minutes: state.slotMinutes,
     meeting_len_slots: meetingLenSlots,
     availability: state.availability,
     pref_start_ok: state.prefStartOk,
@@ -368,7 +514,8 @@ async function computeAndRender() {
     late_penalty_per_slot: params.latePenalty
   };
 
-  renderResult("백엔드 계산 중...", true);
+  renderResult("계산 중...", true);
+  renderTopCandidates("-", true);
 
   let resp;
   try {
@@ -381,68 +528,56 @@ async function computeAndRender() {
   const bestStart = resp.best_start;
   const bestEnd = resp.best_end;
 
-  // attendees/prefHits는 백엔드 결과 사용
   const attendees = resp.attendees || [];
   const prefHits = resp.pref_hit_people || [];
 
-  // local arrays 범위 체크 (혹시 응답이 범위 밖이면 방어)
-  const localScore = (bestStart >= 0 && bestStart < scores.length) ? scores[bestStart] : null;
-  const localCount = (bestStart >= 0 && bestStart < counts.length) ? counts[bestStart] : null;
-  const localWAtt = (bestStart >= 0 && bestStart < wAtt.length) ? wAtt[bestStart] : null;
-  const localWPref = (bestStart >= 0 && bestStart < wPref.length) ? wPref[bestStart] : null;
-  const localLate = (bestStart >= 0 && bestStart < lateOverlap.length) ? lateOverlap[bestStart] : null;
-
   const resultText = [
-    "===== Best Meeting Time (Backend) =====",
-    `Start: ${formatDayTime(bestStart, spd, params.slotMinutes)}`,
-    `End  : ${formatDayTime(bestEnd, spd, params.slotMinutes)}`,
-    `Score (backend): ${Number(resp.score).toFixed(2)}`,
-    localScore !== null ? `Score (local check): ${localScore.toFixed(2)}` : `Score (local check): -`,
-    localCount !== null ? `Unweighted attendees: ${localCount}/${params.numPeople}` : `Unweighted attendees: -`,
-    localWAtt !== null ? `Weighted attendance : ${localWAtt.toFixed(2)}` : `Weighted attendance : -`,
-    localWPref !== null ? `Weighted pref hits  : ${localWPref.toFixed(2)} (people: [${prefHits.join(", ")}])` : `Weighted pref hits  : -`,
-    localLate !== null ? `Late overlap slots  : ${localLate} (>=20:00)` : `Late overlap slots  : -`,
-    `Attendees           : [${attendees.join(", ")}]`,
-    resp.meta ? `Meta: ${JSON.stringify(resp.meta)}` : ""
-  ].filter(line => line !== "").join("\n");
+    `Best Start: ${formatDayTime(bestStart, state.spd, state.slotMinutes)}`,
+    `Best End  : ${formatDayTime(bestEnd, state.spd, state.slotMinutes)}`,
+    `Score     : ${Number(resp.score).toFixed(2)}`,
+    `Attendees : ${attendees.length}/${state.people.length}  [${attendees.join(", ")}]`,
+    prefHits.length ? `Pref hits : [${prefHits.join(", ")}]` : `Pref hits : -`,
+    resp.meta ? `Meta      : ${JSON.stringify(resp.meta)}` : ""
+  ].filter(Boolean).join("\n");
 
   renderResult(resultText, false);
 
   // TopK 후보 표시
+  const topK = Math.max(3, params.topK);
   const idxs = scores.map((v, i) => ({ i, v }))
     .sort((a, b) => b.v - a.v)
-    .slice(0, Math.max(3, params.topK));
+    .slice(0, topK);
 
   const topText = idxs.map((x, r) => {
     const s = x.i;
     const e = s + meetingLenSlots;
     return [
-      `${String(r + 1).padStart(2, " ")}. ${formatDayTime(s, spd, params.slotMinutes)} ~ ${formatDayTime(e, spd, params.slotMinutes)}`,
-      `    score=${scores[s].toFixed(2)}, attend=${counts[s]}/${params.numPeople}, w_att=${wAtt[s].toFixed(2)}, w_pref=${wPref[s].toFixed(2)}, late=${lateOverlap[s]}`
+      `${String(r + 1).padStart(2, " ")}. ${formatDayTime(s, state.spd, state.slotMinutes)} ~ ${formatDayTime(e, state.spd, state.slotMinutes)}`,
+      `    score=${scores[s].toFixed(2)}, attend=${counts[s]}/${state.people.length}, w_att=${wAtt[s].toFixed(2)}, w_pref=${wPref[s].toFixed(2)}, late=${lateOverlap[s]}`
     ].join("\n");
   }).join("\n");
 
   renderTopCandidates(topText, false);
+
+  // 저장(시간표 페이지에서 사용 + 다운로드에 weights 반영)
+  persistToLocalStorage({ weights });
 }
 
 // =========================
-// Buttons
+// Events
 // =========================
 document.getElementById("btnGenerate").addEventListener("click", () => {
-  const params = readParams();
+  const params = getParams();
 
+  // 랜덤 생성 시: person_id는 0..N-1
   const gen = generateRandomAvailability({
     numPeople: params.numPeople,
     slotMinutes: params.slotMinutes,
     seed: params.seed
   });
 
-  state.availability = gen.availability;
-  state.spd = gen.spd;
-  state.totalSlots = gen.totalSlots;
-
   const prefWindowSlots = Math.max(1, Math.floor(params.prefWindowMinutes / params.slotMinutes));
-  state.prefStartOk = generateRandomPreferences({
+  const prefStartOk = generateRandomPreferences({
     numPeople: params.numPeople,
     totalSlots: gen.totalSlots,
     spd: gen.spd,
@@ -451,18 +586,72 @@ document.getElementById("btnGenerate").addEventListener("click", () => {
     seed: params.seed + 88
   });
 
-  state.lastParams = params;
+  state.slotMinutes = params.slotMinutes;
+  state.spd = gen.spd;
+  state.totalSlots = gen.totalSlots;
+  state.people = Array.from({ length: params.numPeople }, (_, i) => i);
+  state.availability = gen.availability;
+  state.prefStartOk = prefStartOk;
+  state.weightsBase = Array(params.numPeople).fill(1.0);
 
-  document.getElementById("dataSummary").classList.remove("muted");
-  document.getElementById("dataSummary").textContent = summarizeData(params);
+  setDataSummary(summarizeSchedule(), false);
+  enableDataButtons(true);
 
-  document.getElementById("btnOptimize").disabled = false;
-
-  renderResult("데이터 생성 완료. “최적화 실행 (Backend)”을 눌러주세요.", true);
+  renderResult("데이터 준비 완료. 최적화를 실행하세요.", true);
   renderTopCandidates("-", true);
+
+  persistToLocalStorage();
+});
+
+document.getElementById("btnLoadCsv").addEventListener("click", async () => {
+  const fileInput = document.getElementById("csvFile");
+  const file = fileInput.files?.[0];
+  if (!file) {
+    renderResult("CSV 파일을 선택해주세요.", false);
+    return;
+  }
+
+  const text = await file.text();
+  try {
+    const rows = parseCsvText(text);
+    const built = buildScheduleFromRows(rows);
+
+    // UI 반영
+    document.getElementById("slotMinutes").value = String(built.slotMinutes);
+    document.getElementById("numPeople").value = String(built.numPeople);
+
+    state.slotMinutes = built.slotMinutes;
+    state.spd = built.spd;
+    state.totalSlots = built.totalSlots;
+    state.people = built.people;                 // person_id 목록
+    state.availability = built.availability;
+    state.prefStartOk = built.prefStartOk;
+    state.weightsBase = built.weights;
+
+    setDataSummary(summarizeSchedule(), false);
+    enableDataButtons(true);
+
+    renderResult("CSV 로드 완료. 최적화를 실행하세요.", true);
+    renderTopCandidates("-", true);
+
+    persistToLocalStorage({ weights: built.weights });
+  } catch (e) {
+    renderResult(`CSV 로드 실패: ${String(e.message || e)}`, false);
+  }
 });
 
 document.getElementById("btnOptimize").addEventListener("click", async () => {
-  renderTopCandidates("-", true);
-  await computeAndRender();
+  await optimizeBackend();
 });
+
+document.getElementById("btnViewTimetable").addEventListener("click", () => {
+  if (!state.availability) return;
+  persistToLocalStorage();
+  window.location.href = "./timetable.html";
+});
+
+// 초기 상태
+enableDataButtons(false);
+setDataSummary("아직 데이터가 없습니다. 랜덤 생성 또는 CSV 로드를 해주세요.", true);
+renderResult("아직 실행 전입니다.", true);
+renderTopCandidates("-", true);
