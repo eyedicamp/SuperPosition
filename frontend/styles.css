@@ -1,0 +1,112 @@
+:root {
+  --bg: #0b1020;
+  --card: #121a33;
+  --text: #e8ecff;
+  --muted: #a7b0d6;
+  --border: rgba(255,255,255,0.12);
+  --btn: #22305f;
+  --btn2: #2b3a75;
+  --accent: #6ea8ff;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", Arial, sans-serif;
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(110,168,255,0.22), transparent 60%),
+              radial-gradient(800px 500px at 90% 0%, rgba(150,80,255,0.18), transparent 55%),
+              var(--bg);
+  color: var(--text);
+}
+
+.wrap {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+}
+
+header h1 {
+  margin: 0 0 8px 0;
+  font-size: 28px;
+}
+.sub {
+  margin: 0 0 18px 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.card {
+  background: rgba(18,26,51,0.9);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  margin: 14px 0;
+  backdrop-filter: blur(6px);
+}
+
+h2 { margin: 0 0 12px 0; font-size: 18px; }
+h3 { margin: 16px 0 8px 0; font-size: 15px; color: var(--muted); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+input, select {
+  width: 100%;
+  padding: 10px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.06);
+  color: var(--text);
+  outline: none;
+}
+
+.btnrow {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+button {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--btn);
+  color: var(--text);
+  border-radius: 10px;
+  cursor: pointer;
+}
+button:hover { background: var(--btn2); }
+button.primary {
+  border-color: rgba(110,168,255,0.35);
+  background: rgba(110,168,255,0.18);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.muted { color: var(--muted); }
+
+.hint {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255,255,255,0.18);
+  color: var(--muted);
+  font-size: 12.5px;
+}

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Meeting Time Optimizer (SA)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Meeting Time Optimizer</h1>
+      <p class="sub">
+        1주(7일) 스케줄 기반: 참석 가능 + 선호 시간대 + 중요 인원 가중치 + 20:00 이후 패널티를 반영해 SA로 시작시간을 탐색합니다.
+      </p>
+    </header>
+
+    <section class="card">
+      <h2>설정</h2>
+      <div class="grid">
+        <label>
+          인원 수
+          <input id="numPeople" type="number" min="2" max="60" value="14" />
+        </label>
+
+        <label>
+          슬롯(분)
+          <select id="slotMinutes">
+            <option value="30" selected>30</option>
+            <option value="15">15</option>
+            <option value="60">60</option>
+          </select>
+        </label>
+
+        <label>
+          모임 길이(분)
+          <input id="meetingMinutes" type="number" min="30" step="30" value="180" />
+        </label>
+
+        <label>
+          선호 구간 길이(분)
+          <input id="prefWindowMinutes" type="number" min="30" step="30" value="120" />
+        </label>
+
+        <label>
+          선호 보너스 계수 (λ_pref)
+          <input id="prefBonus" type="number" min="0" step="0.1" value="0.7" />
+        </label>
+
+        <label>
+          20:00 이후 슬롯당 패널티 (λ_late)
+          <input id="latePenalty" type="number" min="0" step="0.5" value="3.0" />
+        </label>
+
+        <label>
+          중요 인원 (예: 0,3)
+          <input id="importantPeople" type="text" value="0,3" />
+        </label>
+
+        <label>
+          중요 인원 가중치
+          <input id="importantWeight" type="number" min="1" step="0.5" value="3.0" />
+        </label>
+
+        <label>
+          랜덤 시드
+          <input id="seed" type="number" value="11" />
+        </label>
+
+        <label>
+          Top-K 후보 출력
+          <input id="topK" type="number" min="3" max="30" value="8" />
+        </label>
+      </div>
+
+      <div class="btnrow">
+        <button id="btnGenerate">랜덤 데이터 생성</button>
+        <button id="btnOptimize" class="primary" disabled>최적화 실행 (SA)</button>
+      </div>
+
+      <div class="hint">
+        현재 버전은 데모를 위해 “랜덤 스케줄/선호”를 생성합니다. 이후 실제 서비스에서는 입력 폼/JSON 업로드로 avail/pref를 구성하면 됩니다.
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>데이터 요약</h2>
+      <div id="dataSummary" class="mono muted">아직 데이터가 없습니다. “랜덤 데이터 생성”을 눌러주세요.</div>
+    </section>
+
+    <section class="card">
+      <h2>결과</h2>
+      <div id="result" class="mono muted">아직 실행 전입니다.</div>
+      <h3>Top 후보</h3>
+      <div id="topCandidates" class="mono muted">-</div>
+    </section>
+
+    <footer class="muted">
+      <small>Frontend-only (GitHub Pages compatible). Simulated Annealing in JavaScript.</small>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
