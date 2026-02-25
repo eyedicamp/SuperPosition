@@ -3,20 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any
 
-app = FastAPI(title="Meeting Optimizer API", version="0.1.0")
+import dimod
+from neal import SimulatedAnnealingSampler
 
-# ✅ CORS
-# - allow_origins="*" 를 쓰려면 allow_credentials는 반드시 False여야 안전합니다.
-# - 운영에서는 GitHub Pages 도메인으로 좁히는 것을 권장합니다.
+app = FastAPI(title="Meeting Optimizer API", version="0.2.0")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # 운영 시: ["https://<username>.github.io", "https://<username>.github.io/<repo>"] 로 변경 권장
-    allow_credentials=False,      # ✅ 핵심: "*" 와 같이 쓰려면 False
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ Render 헬스체크/접속 확인용
 @app.get("/")
 def health():
     return {"status": "ok"}
@@ -26,7 +25,7 @@ class SolveRequest(BaseModel):
     slot_minutes: int
     meeting_len_slots: int
     availability: List[List[bool]]      # [P][T]
-    pref_start_ok: List[List[bool]]     # [P][T] (시작시간이 선호 구간이면 True)
+    pref_start_ok: List[List[bool]]     # [P][T]
     weights: List[float]
     pref_bonus: float = 0.7
     late_hour: int = 20
@@ -40,47 +39,114 @@ class SolveResponse(BaseModel):
     pref_hit_people: List[int]
     meta: Dict[str, Any] = {}
 
-def solve_with_simulated_annealing(payload: SolveRequest) -> SolveResponse:
-    # 현재는 점수 최대(브루트포스)로 구현되어 있음
-    # 나중에 neal(BQM) 또는 QA로 교체하려면 이 함수 내부만 바꾸면 됨
+def _compute_scores(payload: SolveRequest) -> List[float]:
+    P = payload.num_people
     T = len(payload.availability[0])
-    max_start = T - payload.meeting_len_slots
+    L = payload.meeting_len_slots
+    max_start = T - L
 
-    best_start = 0
-    best_score = -1e18
+    slots_per_day = int(24 * 60 / payload.slot_minutes)
+    late_slot_in_day = int(payload.late_hour * (60 / payload.slot_minutes))
+
+    scores = [0.0] * max_start
 
     for s in range(max_start):
         score = 0.0
 
-        # 참석 + 선호 보너스
-        for p in range(payload.num_people):
+        # weighted attendance + preference bonus
+        for p in range(P):
             ok = True
-            for t in range(s, s + payload.meeting_len_slots):
+            for t in range(s, s + L):
                 if not payload.availability[p][t]:
                     ok = False
                     break
             if ok:
-                score += payload.weights[p]
+                w = payload.weights[p]
+                score += w
                 if payload.pref_start_ok[p][s]:
-                    score += payload.pref_bonus * payload.weights[p]
+                    score += payload.pref_bonus * w
 
-        # 늦은 시간 패널티
-        slots_per_day = int(24 * 60 / payload.slot_minutes)
-        late_slot_in_day = int(payload.late_hour * (60 / payload.slot_minutes))
-
+        # late penalty
         overlap = 0
-        for t in range(s, s + payload.meeting_len_slots):
+        for t in range(s, s + L):
             if (t % slots_per_day) >= late_slot_in_day:
                 overlap += 1
-
         score -= payload.late_penalty_per_slot * overlap
 
-        if score > best_score:
-            best_score = score
-            best_start = s
+        scores[s] = score
 
+    return scores
+
+def _build_onehot_bqm(scores: List[float], A: float) -> dimod.BinaryQuadraticModel:
+    """
+    Variables: y_s in {0,1}  (choose start time s)
+    Energy to minimize:
+        E = -sum_s scores[s]*y_s + A*(sum_s y_s - 1)^2
+    """
+    n = len(scores)
+    linear = {}
+    quadratic = {}
+    offset = 0.0
+
+    # Expand penalty:
+    # A*(S-1)^2 = A*(-sum y_i + 2*sum_{i<j} y_i y_j + 1)
+    # => linear add -A, quadratic add 2A, offset add A
+    for i in range(n):
+        linear[f"y_{i}"] = float(-scores[i] - A)
+
+    for i in range(n):
+        vi = f"y_{i}"
+        for j in range(i + 1, n):
+            vj = f"y_{j}"
+            quadratic[(vi, vj)] = float(2.0 * A)
+
+    offset += float(A)
+    return dimod.BinaryQuadraticModel(linear, quadratic, offset, vartype=dimod.BINARY)
+
+def _decode_best_start(sample: dict, scores: List[float]) -> int:
+    chosen = [int(k.split("_")[1]) for k, v in sample.items() if v == 1 and k.startswith("y_")]
+    if len(chosen) == 1:
+        return chosen[0]
+    # fallback if constraint violated
+    return int(max(range(len(scores)), key=lambda i: scores[i]))
+
+def solve_with_neal_sa(payload: SolveRequest) -> SolveResponse:
+    scores = _compute_scores(payload)
+    if not scores:
+        return SolveResponse(
+            best_start=0,
+            best_end=payload.meeting_len_slots,
+            score=0.0,
+            attendees=[],
+            pref_hit_people=[],
+            meta={"solver": "python-neal-sa", "note": "no feasible start times"}
+        )
+
+    # Choose penalty A large enough so that one-hot constraint dominates
+    smax = max(scores)
+    smin = min(scores)
+    scale = max(abs(smax), abs(smin), 1.0)
+    A = max(50.0, 10.0 * scale + 10.0)
+
+    bqm = _build_onehot_bqm(scores, A=A)
+
+    sampler = SimulatedAnnealingSampler()
+    num_reads = 200
+    num_sweeps = 4000
+    beta_range = (0.1, 4.0)
+
+    sampleset = sampler.sample(
+        bqm,
+        num_reads=num_reads,
+        num_sweeps=num_sweeps,
+        beta_range=beta_range
+    )
+
+    best = sampleset.first
+    best_start = _decode_best_start(best.sample, scores)
     best_end = best_start + payload.meeting_len_slots
 
+    # attendees / pref hits
     attendees = []
     pref_hits = []
     for p in range(payload.num_people):
@@ -97,12 +163,18 @@ def solve_with_simulated_annealing(payload: SolveRequest) -> SolveResponse:
     return SolveResponse(
         best_start=best_start,
         best_end=best_end,
-        score=float(best_score),
+        score=float(scores[best_start]),
         attendees=attendees,
         pref_hit_people=pref_hits,
-        meta={"solver": "python-sa-dummy"}
+        meta={
+            "solver": "python-neal-sa",
+            "A": A,
+            "num_reads": num_reads,
+            "num_sweeps": num_sweeps,
+            "beta_range": list(beta_range),
+        }
     )
 
 @app.post("/solve", response_model=SolveResponse)
 def solve(req: SolveRequest):
-    return solve_with_simulated_annealing(req)
+    return solve_with_neal_sa(req)
