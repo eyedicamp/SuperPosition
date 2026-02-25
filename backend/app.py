@@ -1,12 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 import dimod
 from neal import SimulatedAnnealingSampler
 
-app = FastAPI(title="Meeting Optimizer API", version="0.2.0")
+app = FastAPI(title="Meeting Optimizer API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,9 +41,15 @@ class SolveResponse(BaseModel):
 
 def _compute_scores(payload: SolveRequest) -> List[float]:
     P = payload.num_people
+    L = int(payload.meeting_len_slots)
+
+    if P <= 0 or L <= 0:
+        return []
+
     T = len(payload.availability[0])
-    L = payload.meeting_len_slots
     max_start = T - L
+    if max_start <= 0:
+        return []
 
     slots_per_day = int(24 * 60 / payload.slot_minutes)
     late_slot_in_day = int(payload.late_hour * (60 / payload.slot_minutes))
@@ -61,79 +67,116 @@ def _compute_scores(payload: SolveRequest) -> List[float]:
                     ok = False
                     break
             if ok:
-                w = payload.weights[p]
+                w = float(payload.weights[p])
                 score += w
                 if payload.pref_start_ok[p][s]:
-                    score += payload.pref_bonus * w
+                    score += float(payload.pref_bonus) * w
 
         # late penalty
         overlap = 0
         for t in range(s, s + L):
             if (t % slots_per_day) >= late_slot_in_day:
                 overlap += 1
-        score -= payload.late_penalty_per_slot * overlap
+        score -= float(payload.late_penalty_per_slot) * overlap
 
         scores[s] = score
 
     return scores
 
-def _build_onehot_bqm(scores: List[float], A: float) -> dimod.BinaryQuadraticModel:
+def _build_domain_wall_bqm(scores: List[float], A: float) -> dimod.BinaryQuadraticModel:
     """
-    Variables: y_s in {0,1}  (choose start time s)
-    Energy to minimize:
-        E = -sum_s scores[s]*y_s + A*(sum_s y_s - 1)^2
+    Domain-wall encoding to choose an index k in {0..n-1} using z_0..z_{n-2}.
+    Representation:
+      - k = number of leading 1s (sum z_i) when monotone: 1...1 0...0
+      - Constraint (monotone): forbid 0->1 transitions, i.e. z_i >= z_{i+1}
+        penalty per i: A * z_{i+1} * (1 - z_i) = A*z_{i+1} - A*z_i*z_{i+1}
+
+    Objective:
+      maximize Score(k), where k is chosen index.
+      Score(k) can be written as:
+        Score = score[0] + sum_{j=0..n-2} (score[j+1] - score[j]) * z_j
+      So minimizing energy E = -Score is:
+        linear[z_j] += -(score[j+1]-score[j])
+        offset += -score[0]
     """
     n = len(scores)
-    linear = {}
-    quadratic = {}
-    offset = 0.0
+    if n <= 1:
+        return dimod.BinaryQuadraticModel({}, {}, 0.0, vartype=dimod.BINARY)
 
-    # Expand penalty:
-    # A*(S-1)^2 = A*(-sum y_i + 2*sum_{i<j} y_i y_j + 1)
-    # => linear add -A, quadratic add 2A, offset add A
-    for i in range(n):
-        linear[f"y_{i}"] = float(-scores[i] - A)
+    linear: Dict[str, float] = {}
+    quadratic: Dict[Tuple[str, str], float] = {}
+    offset = -float(scores[0])
 
-    for i in range(n):
-        vi = f"y_{i}"
-        for j in range(i + 1, n):
-            vj = f"y_{j}"
-            quadratic[(vi, vj)] = float(2.0 * A)
+    # objective linear terms
+    for j in range(n - 1):
+        delta = float(scores[j + 1] - scores[j])
+        linear[f"z_{j}"] = linear.get(f"z_{j}", 0.0) - delta
 
-    offset += float(A)
+    # monotone constraint penalties (chain couplers)
+    # for i=0..n-3: A*z_{i+1} - A*z_i*z_{i+1}
+    for i in range(n - 2):
+        zi = f"z_{i}"
+        zj = f"z_{i+1}"
+        linear[zj] = linear.get(zj, 0.0) + float(A)
+        quadratic[(zi, zj)] = quadratic.get((zi, zj), 0.0) - float(A)
+
     return dimod.BinaryQuadraticModel(linear, quadratic, offset, vartype=dimod.BINARY)
 
-def _decode_best_start(sample: dict, scores: List[float]) -> int:
-    chosen = [int(k.split("_")[1]) for k, v in sample.items() if v == 1 and k.startswith("y_")]
-    if len(chosen) == 1:
-        return chosen[0]
-    # fallback if constraint violated
-    return int(max(range(len(scores)), key=lambda i: scores[i]))
+def _repair_and_decode_k(sample: Dict[str, int], n: int) -> int:
+    """
+    Read z_0..z_{n-2}, repair to monotone 1...10...0 by enforcing:
+      z_{i} <= z_{i-1} for i>=1 (so no 0->1)
+    Then decode k = sum z_i (k in [0..n-1]).
+    """
+    if n <= 1:
+        return 0
+
+    z = []
+    for i in range(n - 1):
+        v = sample.get(f"z_{i}", 0)
+        z.append(1 if int(v) == 1 else 0)
+
+    # repair: once 0 appears, everything after becomes 0
+    for i in range(1, n - 1):
+        if z[i - 1] == 0:
+            z[i] = 0
+
+    k = sum(z)
+    if k < 0:
+        k = 0
+    if k > n - 1:
+        k = n - 1
+    return k
 
 def solve_with_neal_sa(payload: SolveRequest) -> SolveResponse:
     scores = _compute_scores(payload)
-    if not scores:
+    n = len(scores)
+
+    if n == 0:
         return SolveResponse(
             best_start=0,
-            best_end=payload.meeting_len_slots,
+            best_end=int(payload.meeting_len_slots),
             score=0.0,
             attendees=[],
             pref_hit_people=[],
-            meta={"solver": "python-neal-sa", "note": "no feasible start times"}
+            meta={"solver": "python-neal-sa-domainwall", "note": "no feasible start times"}
         )
 
-    # Choose penalty A large enough so that one-hot constraint dominates
-    smax = max(scores)
-    smin = min(scores)
-    scale = max(abs(smax), abs(smin), 1.0)
-    A = max(50.0, 10.0 * scale + 10.0)
+    # penalty scale based on score differences (keeps constraint strong but not blocking moves)
+    if n >= 2:
+        deltas = [abs(scores[i + 1] - scores[i]) for i in range(n - 1)]
+        max_delta = max(deltas) if deltas else 1.0
+    else:
+        max_delta = 1.0
 
-    bqm = _build_onehot_bqm(scores, A=A)
+    A = max(5.0, 5.0 * float(max_delta) + 1.0)
+
+    bqm = _build_domain_wall_bqm(scores, A=A)
 
     sampler = SimulatedAnnealingSampler()
-    num_reads = 200
-    num_sweeps = 4000
-    beta_range = (0.1, 4.0)
+    num_reads = 400
+    num_sweeps = 6000
+    beta_range = (0.01, 6.0)
 
     sampleset = sampler.sample(
         bqm,
@@ -142,11 +185,28 @@ def solve_with_neal_sa(payload: SolveRequest) -> SolveResponse:
         beta_range=beta_range
     )
 
-    best = sampleset.first
-    best_start = _decode_best_start(best.sample, scores)
-    best_end = best_start + payload.meeting_len_slots
+    # pick best by decoded score (robust even if some samples violate monotonicity)
+    best_k = 0
+    best_score = scores[0]
+    for datum in sampleset.data(fields=["sample"]):
+        k = _repair_and_decode_k(datum.sample, n)
+        sc = scores[k]
+        if sc > best_score:
+            best_score = sc
+            best_k = k
 
-    # attendees / pref hits
+    # safety: ensure we never return worse than true argmax(scores)
+    exact_k = max(range(n), key=lambda i: scores[i])
+    exact_score = scores[exact_k]
+    used_exact_fallback = False
+    if best_score < exact_score:
+        best_k = exact_k
+        best_score = exact_score
+        used_exact_fallback = True
+
+    best_start = best_k
+    best_end = best_start + int(payload.meeting_len_slots)
+
     attendees = []
     pref_hits = []
     for p in range(payload.num_people):
@@ -163,15 +223,16 @@ def solve_with_neal_sa(payload: SolveRequest) -> SolveResponse:
     return SolveResponse(
         best_start=best_start,
         best_end=best_end,
-        score=float(scores[best_start]),
+        score=float(best_score),
         attendees=attendees,
         pref_hit_people=pref_hits,
         meta={
-            "solver": "python-neal-sa",
+            "solver": "python-neal-sa-domainwall",
             "A": A,
             "num_reads": num_reads,
             "num_sweeps": num_sweeps,
             "beta_range": list(beta_range),
+            "used_exact_fallback": used_exact_fallback,
         }
     )
 
