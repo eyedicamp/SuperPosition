@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -10,13 +10,12 @@
   <div class="wrap">
     <header class="hero">
       <div class="brand">
-        <div class="badge">Super Position</div>
-        <h1>Timetable</h1>
+        <h1 class="title"><span class="title-emoji" aria-hidden="true">🍟</span> Timetable</h1>
         <p class="subtitle">Schedules by person (availability + preference)</p>
       </div>
       <div class="card-actions">
         <button id="btnBack" class="ghost">← Back</button>
-        <button id="btnDownload" class="primary" disabled>시간표 다운로드 (CSV)</button>
+        <button id="btnDownload" class="primary" disabled>Download CSV</button>
       </div>
     </header>
 
@@ -33,13 +32,13 @@
       </div>
 
       <div id="emptyState" class="muted" style="display:none;">
-        데이터가 없습니다. 메인 페이지에서 랜덤 생성 또는 CSV 로드를 먼저 진행하세요.
+        No schedule found. Go back and generate random data or load a CSV.
       </div>
 
       <div id="gridWrap" class="gridwrap" style="display:none;"></div>
 
       <div class="inline-note" style="margin-top:12px;">
-        <b>표기:</b> 흰색=가능, 회색=불가, 노랑=선호(해당 슬롯 시작)
+        <b>Legend:</b> white=available, gray=busy, yellow=preference (slot start)
       </div>
     </section>
   </div>
