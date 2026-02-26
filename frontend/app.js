@@ -368,6 +368,9 @@ function getParams() {
     importantPeople: parseCSVIndices(document.getElementById("importantPeople").value),
     importantWeight: Number(document.getElementById("importantWeight").value),
     topK: Number(document.getElementById("topK").value),
+    solverMode: (document.getElementById("solverMode")?.value || "sa"),
+    dwaveToken: (document.getElementById("dwaveToken")?.value || ""),
+    dwaveSolver: (document.getElementById("dwaveSolver")?.value || ""),
   };
 }
 
@@ -589,7 +592,10 @@ async function optimizeBackend() {
     weights: weights,
     pref_bonus: params.prefBonus,
     late_hour: params.lateHour,
-    late_penalty_per_slot: params.latePenalty
+    late_penalty_per_slot: params.latePenalty,
+    solver_mode: params.solverMode,
+    dwave_token: params.solverMode === "qa" ? params.dwaveToken : null,
+    dwave_solver: params.solverMode === "qa" ? (params.dwaveSolver || null) : null
   };
 
   renderResult("Running...", true);
@@ -798,6 +804,59 @@ document.getElementById("btnDownloadCsvTemplate").addEventListener("click", () =
   downloadTextFile(`super_position_csv_template_${params.numPeople}p_${params.slotMinutes}m.csv`, csv);
 });
 
+function toggleDwaveUI() {
+  const mode = document.getElementById("solverMode")?.value || "sa";
+  const tokenLabel = document.getElementById("dwaveTokenLabel");
+  const solverLabel = document.getElementById("dwaveSolverLabel");
+  const show = (mode === "qa");
+  if (tokenLabel) tokenLabel.style.display = show ? "" : "none";
+  if (solverLabel) solverLabel.style.display = show ? "" : "none";
+}
+
+document.getElementById("solverMode")?.addEventListener("change", toggleDwaveUI);
+toggleDwaveUI();
+
+async function fetchDwaveSolvers(apiBase, token) {
+  const res = await fetch(`${apiBase}/dwave/solvers`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ token })
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to load solvers (${res.status}): ${text}`);
+  }
+  return await res.json(); // {solvers:[...]}
+}
+
+document.getElementById("btnLoadSolvers")?.addEventListener("click", async () => {
+  try {
+    const params = getParams();
+    if (!params.apiBase) throw new Error("Backend API Base URL is empty.");
+    if (!params.dwaveToken) throw new Error("Please paste your D-Wave token first.");
+
+    const out = await fetchDwaveSolvers(params.apiBase, params.dwaveToken);
+    const sel = document.getElementById("dwaveSolver");
+    if (!sel) return;
+
+    // reset options
+    sel.innerHTML = "";
+    const opt0 = document.createElement("option");
+    opt0.value = "";
+    opt0.textContent = "Auto (any online QPU)";
+    sel.appendChild(opt0);
+
+    (out.solvers || []).forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    alert(String(e.message || e));
+  }
+});
+
 // init
 enableDataButtons(false);
 setDataSummary("No data yet. Generate random data or load a CSV.", true);
@@ -815,3 +874,4 @@ const saved = loadPersistedSchedule();
 if (saved && saved.availability && saved.prefStartOk && saved.people && saved.slotMinutes) {
   restoreFromPersistedSchedule(saved);
 }
+
