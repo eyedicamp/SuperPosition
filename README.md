@@ -222,11 +222,9 @@ Expanding the squared term yields a standard QUBO with linear and quadratic coef
 ```math
 E(\mathbf{x})
 =
-2\lambda\sum_{0\le s<t\le T-L} x_s x_t
-\;+\;
-\sum_{s=0}^{T-L}\left(-W_s - \lambda\right)x_s
-\;+\;
-\lambda
+2\lambda \sum_{s=0}^{T-L} \sum_{t=s+1}^{T-L} x_s x_t
++ \sum_{s=0}^{T-L}(-W_s - \lambda)x_s
++ \lambda
 ```
 
 So the QUBO matrix $Q$ can be constructed as:
