@@ -109,11 +109,12 @@ h3{margin:0 0 10px 0;font-size:14px;color:var(--muted);font-weight:800}
 }
 @media (max-width: 720px){ .grid{grid-template-columns:1fr} }
 
+/* ✅ labels (e.g., “Meeting length (minutes)”) bigger */
 label{
   display:grid;
   gap:6px;
   color:var(--muted);
-  font-size:13px;
+  font-size:15px; /* was 13px */
 }
 
 input, select{
@@ -193,6 +194,70 @@ button:disabled{
 }
 
 .footer{ text-align:center; margin-top: 10px; }
+
+/* timetable page (existing) */
+.tabs{ display:flex; gap:8px; flex-wrap:wrap; }
+.tab{
+  padding:8px 12px;
+  border-radius:999px;
+  border:1px solid rgba(27,27,31,.14);
+  background:#fff;
+  font-weight:900;
+}
+.tab.active{
+  background: linear-gradient(180deg, var(--y), var(--y2));
+}
+
+.gridwrap{
+  overflow:auto;
+  border-radius:14px;
+  border:1px solid rgba(27,27,31,.10);
+  background:#fff;
+}
+
+.gridrow{ display:grid; }
+
+.cell{
+  padding:0;
+  height: 26px;
+  border-right:1px solid rgba(27,27,31,.06);
+  border-bottom:1px solid rgba(27,27,31,.06);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:11px;
+  color:var(--muted);
+}
+
+.headcell{
+  height:34px;
+  font-weight:900;
+  color:var(--text);
+  background: rgba(255,242,191,.55);
+}
+
+.sticky{
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+
+.personcell{
+  justify-content:flex-start;
+  padding:0 10px;
+  background:#fff;
+  font-weight:800;
+  color:var(--text);
+}
+
+.header .sticky{ z-index:3; }
+
+.slotcell{ background:#fff; }
+.slotcell.busy{ background: rgba(27,27,31,.10); }
+.slotcell.pref{
+  background: linear-gradient(180deg, rgba(255,216,77,.95), rgba(255,242,191,.55));
+  border: 1px solid rgba(27,27,31,.10);
+}
 
 /* Top-K visualization */
 .viz-legend{
