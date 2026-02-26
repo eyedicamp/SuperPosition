@@ -131,6 +131,28 @@
           Top-K candidates
           <input id="topK" type="number" min="3" max="30" value="8" />
         </label>
+        <label>
+          Solver
+          <select id="solverMode">
+            <option value="sa" selected>Simulated Annealing (neal)</option>
+            <option value="qa">Quantum Annealing (D-Wave QPU)</option>
+          </select>
+        </label>
+        
+        <label id="dwaveTokenLabel" style="display:none;">
+          D-Wave API Token
+          <input id="dwaveToken" type="password" placeholder="Paste your token" />
+        </label>
+        
+        <label id="dwaveSolverLabel" style="display:none;">
+          D-Wave QPU Model
+          <select id="dwaveSolver">
+            <option value="">Auto (any online QPU)</option>
+          </select>
+          <div class="btnrow" style="margin-top:6px;">
+            <button id="btnLoadSolvers" class="ghost" type="button">Load QPU Models</button>
+          </div>
+        </label>
       </div>
 
       <div class="btnrow">
@@ -176,3 +198,4 @@
   <script src="app.js"></script>
 </body>
 </html>
+
