@@ -126,103 +126,100 @@ This project can solve the “best meeting start time” problem via **QUBO** (Q
 
 ### 1) Time discretization
 
-Let the week be discretized into fixed-size slots (e.g., 30 minutes).  
-Define:
+Let the week be discretized into fixed-size slots (e.g., 30 minutes). Define:
 
-- Total number of slots: \(T\)
-- Meeting length in slots: \(L\)  (e.g., 180 minutes with 30-min slots \(\Rightarrow L=6\))
-- Candidate meeting start slots: \(s \in \{0,1,\dots,T-L\}\)
+- Total number of slots: $T$
+- Meeting length in slots: $L$ (e.g., 180 minutes with 30-min slots $\Rightarrow L=6$)
+- Candidate meeting start slots: $s \in \{0,1,\dots,T-L\}$
 
 ### 2) Decision variables
 
 We use a **one-hot** binary vector over start times:
 
-\[
+```math
 x_s \in \{0,1\}\quad \text{for } s=0,\dots,T-L
-\]
+```
 
 where:
 
-- \(x_s = 1\) means “the meeting starts at slot \(s\)”
+- $x_s = 1$ means “the meeting starts at slot $s$”
 - exactly one start time must be chosen
 
 ### 3) Precomputed feasibility and preference indicators
 
-For each person \(i\in\{1,\dots,N\}\), define:
+For each person $i\in\{1,\dots,N\}$, define:
 
-- Weight (importance): \(w_i \ge 0\)
-- Slot-level availability: \(a_{i,t}\in\{0,1\}\) for each slot \(t\)
-- Start preference indicator: \(p_{i,s}\in\{0,1\}\) for each start \(s\)  
-  (in the UI this corresponds to `pref_start_ok`)
+- Weight (importance): $w_i \ge 0$
+- Slot-level availability: $a_{i,t}\in\{0,1\}$ for each slot $t$
+- Start preference indicator: $p_{i,s}\in\{0,1\}$ for each start $s$ (UI: `pref_start_ok`)
 
-A person can attend a meeting starting at \(s\) **only if they are available for all \(L\) consecutive slots**:
+A person can attend a meeting starting at $s$ **only if they are available for all $L$ consecutive slots**:
 
-\[
+```math
 A_{i,s} \;=\; \prod_{k=0}^{L-1} a_{i,s+k} \in \{0,1\}
-\]
+```
 
-So \(A_{i,s}=1\) iff person \(i\) is available for the entire meeting window \([s, s+L-1]\).
+So $A_{i,s}=1$ iff person $i$ is available for the entire meeting window $[s, s+L-1]$.
 
-We also define a late-time overlap penalty term:
+Late-time overlap penalty:
 
-- Late threshold slot index: \(t_{\text{late}}\) (derived from `late_hour`)
-- Number of late slots overlapped by a meeting starting at \(s\):
+- Late threshold slot index: $t_{\text{late}}$ (derived from `late_hour`)
+- Number of late slots overlapped by a meeting starting at $s$:
 
-\[
+```math
 \ell_s \;=\; \sum_{k=0}^{L-1} \mathbf{1}\{s+k \ge t_{\text{late}}\}
-\]
+```
 
 ### 4) Utility of choosing a start time
 
-For each candidate start \(s\), we compute its utility as:
+For each candidate start $s$, we compute its utility as:
 
-\[
+```math
 W_s \;=\; 
 \underbrace{\sum_{i=1}^{N} w_i A_{i,s}}_{\text{weighted attendance}}
 \;+\;
 \underbrace{\beta \sum_{i=1}^{N} w_i A_{i,s} p_{i,s}}_{\text{preference bonus}}
 \;-\;
 \underbrace{\rho \,\ell_s}_{\text{late-time penalty}}
-\]
+```
 
 where:
 
-- \(\beta\) is `pref_bonus`
-- \(\rho\) is `late_penalty_per_slot`
+- $\beta$ is `pref_bonus`
+- $\rho$ is `late_penalty_per_slot`
 
-Intuition:
-- You gain more score when more **high-weight** people can attend.
-- You gain extra score when the chosen start is within the preference window for those attendees.
-- You lose score for meeting time that extends into “late hours”.
+Interpretation:
+
+- Weighted attendance rewards selecting a slot where high-weight people can attend the full meeting.
+- Preference bonus adds extra value when the selected start aligns with attendee start-time preferences.
+- Late penalty discourages solutions that overlap “late hours”.
 
 ### 5) Constraint: choose exactly one start time
 
 The “exactly one” requirement is encoded as a squared penalty:
 
-\[
+```math
 \left(\sum_{s=0}^{T-L} x_s - 1\right)^2
-\]
+```
 
-This equals 0 only when exactly one \(x_s\) is 1.
+This equals 0 only when exactly one $x_s$ is 1.
 
 ### 6) Final QUBO objective (energy)
 
-Quantum annealers minimize an energy function. We therefore **maximize** \(W_s\) by minimizing \(-W_s\).
+Quantum annealers minimize energy. We therefore **maximize** $W_s$ by minimizing $-W_s$ while enforcing one-hot:
 
-The QUBO energy is:
-
-\[
+```math
 E(\mathbf{x}) \;=\;
 \lambda\left(\sum_{s=0}^{T-L} x_s - 1\right)^2
 \;-\;
 \sum_{s=0}^{T-L} W_s x_s
-\]
+```
 
-- \(\lambda>0\) is a penalty coefficient large enough to enforce the one-hot constraint.
+- $\lambda>0$ is a penalty coefficient large enough to enforce feasibility.
 
-Expanding the squared term gives a standard QUBO with linear and quadratic coefficients:
+Expanding the squared term yields a standard QUBO with linear and quadratic coefficients:
 
-\[
+```math
 E(\mathbf{x})
 =
 2\lambda\sum_{0\le s<t\le T-L} x_s x_t
@@ -230,30 +227,23 @@ E(\mathbf{x})
 \sum_{s=0}^{T-L}\left(-W_s - \lambda\right)x_s
 \;+\;
 \lambda
-\]
+```
 
-So the QUBO matrix \(Q\) can be constructed as:
+So the QUBO matrix $Q$ can be constructed as:
 
-- Diagonal (linear) terms:
-  \[
-  Q_{s,s} = -W_s - \lambda
-  \]
-- Off-diagonal (quadratic) terms for \(s<t\):
-  \[
-  Q_{s,t} = 2\lambda
-  \]
+- Diagonal (linear) terms: $Q_{s,s} = -W_s - \lambda$
+- Off-diagonal (quadratic) terms for $s<t$: $Q_{s,t} = 2\lambda$
 
-### 7) Practical note on choosing \(\lambda\)
+### 7) Practical note on choosing $\lambda$
 
-To guarantee feasibility (exactly one start), \(\lambda\) must dominate the benefit of selecting multiple starts. A common safe heuristic is:
+To guarantee feasibility (exactly one start), $\lambda$ must dominate the gain of selecting multiple starts. A commonly used safe heuristic is:
 
-\[
+```math
 \lambda \;>\; \max_s |W_s|
-\]
+```
 
-In practice, \(\lambda\) may also be tuned to fit hardware coefficient ranges (QPU) and to balance numerical stability. If \(\lambda\) is too small, the solver may return invalid solutions with multiple \(x_s=1\). If it is too large, it can compress the effective objective signal and reduce optimization sensitivity.
+In practice, $\lambda$ may also be tuned to fit QPU coefficient ranges and to balance numerical stability. If $\lambda$ is too small, the solver may return invalid solutions (multiple $x_s=1$). If it is too large, the objective signal can be numerically compressed, reducing optimization sensitivity.
 
----
 ---
 
 ## 🌈 Deploy Notes
@@ -261,4 +251,3 @@ In practice, \(\lambda\) may also be tuned to fit hardware coefficient ranges (Q
 - 🧁 **Frontend**: GitHub Pages (root redirects → `/frontend`)
 - 🛠️ **Backend**: Render / Fly.io / any FastAPI hosting
 - 🔗 In the UI, set “Backend API Base URL” to your deployed backend URL
-
