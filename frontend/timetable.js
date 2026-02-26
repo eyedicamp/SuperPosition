@@ -11,10 +11,49 @@ function hhmm(minutes) {
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
+function normalizeSchedule(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  const slotMinutes = raw.slotMinutes ?? raw.slot_minutes;
+  const availabilityRaw = raw.availability ?? raw.availability_matrix ?? raw.avail;
+  const prefRaw = raw.prefStartOk ?? raw.pref_start_ok ?? raw.pref;
+  const peopleRaw = raw.people;
+  const weightsRaw = raw.weights;
+
+  if (!slotMinutes || !availabilityRaw || !prefRaw) return null;
+
+  const P = availabilityRaw.length;
+  const T = availabilityRaw[0]?.length;
+  if (!P || !T) return null;
+
+  const people = Array.isArray(peopleRaw) ? peopleRaw.map(Number) : Array.from({ length: P }, (_, i) => i);
+  const weights = Array.isArray(weightsRaw) ? weightsRaw.map(Number) : Array.from({ length: P }, () => 1.0);
+
+  const availability = Array.from({ length: P }, (_, p) =>
+    Array.from({ length: T }, (_, t) => !!availabilityRaw[p][t])
+  );
+  const prefStartOk = Array.from({ length: P }, (_, p) =>
+    Array.from({ length: T }, (_, t) => !!prefRaw[p][t])
+  );
+
+  return {
+    slotMinutes: Number(slotMinutes),
+    people,
+    weights,
+    availability,
+    prefStartOk,
+  };
+}
+
 function loadSchedule() {
-  const raw = sessionStorage.getItem(STORAGE_KEY) || localStorage.getItem(STORAGE_KEY);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
+  const rawStr = sessionStorage.getItem(STORAGE_KEY) || localStorage.getItem(STORAGE_KEY);
+  if (!rawStr) return null;
+  try {
+    const raw = JSON.parse(rawStr);
+    return normalizeSchedule(raw);
+  } catch {
+    return null;
+  }
 }
 
 function scheduleToCsv({ slotMinutes, people, weights, availability, prefStartOk }) {
@@ -61,6 +100,7 @@ function renderTabs(container, onSelect) {
     container.appendChild(btn);
   });
 }
+
 function setActiveTab(container, idx) {
   const buttons = Array.from(container.querySelectorAll(".tab"));
   buttons.forEach((b, i) => b.classList.toggle("active", i === idx));
@@ -133,7 +173,6 @@ const sched = loadSchedule();
 
 const btnBack = document.getElementById("btnBack");
 btnBack.addEventListener("click", () => {
-  // go back to /frontend/
   window.location.href = "./";
 });
 
@@ -142,7 +181,7 @@ const dayTabs = document.getElementById("dayTabs");
 const gridWrap = document.getElementById("gridWrap");
 const emptyState = document.getElementById("emptyState");
 
-if (!sched || !sched.availability || !sched.prefStartOk || !sched.people || !sched.slotMinutes) {
+if (!sched) {
   emptyState.style.display = "block";
   gridWrap.style.display = "none";
   btnDownload.disabled = true;
