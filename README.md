@@ -120,32 +120,140 @@ Where:
 
 ---
 
-## 🚀 Run Locally
+## 🧮 QUBO Formulation (Quantum Annealing)
 
-### 1) Backend (FastAPI)
+This project can solve the “best meeting start time” problem via **QUBO** (Quadratic Unconstrained Binary Optimization), which is the standard form used by **quantum annealers** (and also by many classical annealing solvers).
 
-```bash
-cd backend
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-source .venv/bin/activate
+### 1) Time discretization
 
-pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-```
+Let the week be discretized into fixed-size slots (e.g., 30 minutes).  
+Define:
 
-> Assumes the FastAPI instance in `backend/app.py` is named `app`.
+- Total number of slots: \(T\)
+- Meeting length in slots: \(L\)  (e.g., 180 minutes with 30-min slots \(\Rightarrow L=6\))
+- Candidate meeting start slots: \(s \in \{0,1,\dots,T-L\}\)
 
-### 2) Frontend (static)
+### 2) Decision variables
 
-```bash
-cd frontend
-python -m http.server 5173
-```
+We use a **one-hot** binary vector over start times:
 
-- Open: `http://localhost:5173/`
-- Set “Backend API Base URL” to `http://localhost:8000`
+\[
+x_s \in \{0,1\}\quad \text{for } s=0,\dots,T-L
+\]
 
+where:
+
+- \(x_s = 1\) means “the meeting starts at slot \(s\)”
+- exactly one start time must be chosen
+
+### 3) Precomputed feasibility and preference indicators
+
+For each person \(i\in\{1,\dots,N\}\), define:
+
+- Weight (importance): \(w_i \ge 0\)
+- Slot-level availability: \(a_{i,t}\in\{0,1\}\) for each slot \(t\)
+- Start preference indicator: \(p_{i,s}\in\{0,1\}\) for each start \(s\)  
+  (in the UI this corresponds to `pref_start_ok`)
+
+A person can attend a meeting starting at \(s\) **only if they are available for all \(L\) consecutive slots**:
+
+\[
+A_{i,s} \;=\; \prod_{k=0}^{L-1} a_{i,s+k} \in \{0,1\}
+\]
+
+So \(A_{i,s}=1\) iff person \(i\) is available for the entire meeting window \([s, s+L-1]\).
+
+We also define a late-time overlap penalty term:
+
+- Late threshold slot index: \(t_{\text{late}}\) (derived from `late_hour`)
+- Number of late slots overlapped by a meeting starting at \(s\):
+
+\[
+\ell_s \;=\; \sum_{k=0}^{L-1} \mathbf{1}\{s+k \ge t_{\text{late}}\}
+\]
+
+### 4) Utility of choosing a start time
+
+For each candidate start \(s\), we compute its utility as:
+
+\[
+W_s \;=\; 
+\underbrace{\sum_{i=1}^{N} w_i A_{i,s}}_{\text{weighted attendance}}
+\;+\;
+\underbrace{\beta \sum_{i=1}^{N} w_i A_{i,s} p_{i,s}}_{\text{preference bonus}}
+\;-\;
+\underbrace{\rho \,\ell_s}_{\text{late-time penalty}}
+\]
+
+where:
+
+- \(\beta\) is `pref_bonus`
+- \(\rho\) is `late_penalty_per_slot`
+
+Intuition:
+- You gain more score when more **high-weight** people can attend.
+- You gain extra score when the chosen start is within the preference window for those attendees.
+- You lose score for meeting time that extends into “late hours”.
+
+### 5) Constraint: choose exactly one start time
+
+The “exactly one” requirement is encoded as a squared penalty:
+
+\[
+\left(\sum_{s=0}^{T-L} x_s - 1\right)^2
+\]
+
+This equals 0 only when exactly one \(x_s\) is 1.
+
+### 6) Final QUBO objective (energy)
+
+Quantum annealers minimize an energy function. We therefore **maximize** \(W_s\) by minimizing \(-W_s\).
+
+The QUBO energy is:
+
+\[
+E(\mathbf{x}) \;=\;
+\lambda\left(\sum_{s=0}^{T-L} x_s - 1\right)^2
+\;-\;
+\sum_{s=0}^{T-L} W_s x_s
+\]
+
+- \(\lambda>0\) is a penalty coefficient large enough to enforce the one-hot constraint.
+
+Expanding the squared term gives a standard QUBO with linear and quadratic coefficients:
+
+\[
+E(\mathbf{x})
+=
+2\lambda\sum_{0\le s<t\le T-L} x_s x_t
+\;+\;
+\sum_{s=0}^{T-L}\left(-W_s - \lambda\right)x_s
+\;+\;
+\lambda
+\]
+
+So the QUBO matrix \(Q\) can be constructed as:
+
+- Diagonal (linear) terms:
+  \[
+  Q_{s,s} = -W_s - \lambda
+  \]
+- Off-diagonal (quadratic) terms for \(s<t\):
+  \[
+  Q_{s,t} = 2\lambda
+  \]
+
+### 7) Practical note on choosing \(\lambda\)
+
+To guarantee feasibility (exactly one start), \(\lambda\) must dominate the benefit of selecting multiple starts. A common safe heuristic is:
+
+\[
+\lambda \;>\; \max_s |W_s|
+\]
+
+In practice, \(\lambda\) may also be tuned to fit hardware coefficient ranges (QPU) and to balance numerical stability. If \(\lambda\) is too small, the solver may return invalid solutions with multiple \(x_s=1\). If it is too large, it can compress the effective objective signal and reduce optimization sensitivity.
+
+---
 ---
 
 ## 🌈 Deploy Notes
@@ -154,21 +262,3 @@ python -m http.server 5173
 - 🛠️ **Backend**: Render / Fly.io / any FastAPI hosting
 - 🔗 In the UI, set “Backend API Base URL” to your deployed backend URL
 
----
-
-## 🖼️ Screenshot setup (IMPORTANT)
-
-To make the screenshot render on GitHub:
-
-1. Create a folder `assets/` at the repo root
-2. Add the image as:
-   - `assets/superposition-preview.png`
-3. Commit & push
-
-✅ Then the top image in this README will display automatically.
-
----
-
-## 📜 License
-
-Add a license if you plan to share/extend this project publicly.
