@@ -308,48 +308,48 @@ function downloadTextFile(filename, text) {
   URL.revokeObjectURL(url);
 }
 
-// State
-let state = {
-  slotMinutes: null,
-  people: null,
-  availability: null,
-  prefStartOk: null,
-  weightsBase: null,
-  spd: null,
-  totalSlots: null,
-};
-
+// UI helpers
 function renderResult(text, muted = false) {
   const el = document.getElementById("result");
+  if (!el) return;
   el.textContent = text;
   el.classList.toggle("muted", muted);
 }
 function renderTopCandidates(text, muted = false) {
   const el = document.getElementById("topCandidates");
+  if (!el) return;
   el.textContent = text;
   el.classList.toggle("muted", muted);
 }
 function setDataSummary(text, muted = false) {
   const el = document.getElementById("dataSummary");
+  if (!el) return;
   el.textContent = text;
   el.classList.toggle("muted", muted);
 }
 function enableDataButtons(enabled) {
-  document.getElementById("btnOptimize").disabled = !enabled;
-  document.getElementById("btnViewTimetable").disabled = !enabled;
+  const opt = document.getElementById("btnOptimize");
+  const tt = document.getElementById("btnViewTimetable");
+  if (opt) opt.disabled = !enabled;
+  if (tt) tt.disabled = !enabled;
 }
 
-function renderViz(html, muted = false) {
-  const wrap = document.getElementById("topViz");
-  wrap.innerHTML = html;
-  wrap.classList.toggle("muted", muted);
-}
 function setVizLegend(text, muted = false) {
   const el = document.getElementById("vizLegend");
+  if (!el) return;
   el.textContent = text;
   el.classList.toggle("muted", muted);
 }
 
+function clearAndAppendViz(node, muted = false) {
+  const wrap = document.getElementById("topViz");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  wrap.appendChild(node);
+  wrap.classList.toggle("muted", muted);
+}
+
+// Validation + params
 function validateMinutesDivisible(minutes, slotMinutes, label) {
   if (minutes % slotMinutes !== 0) throw new Error(`${label} (${minutes}) must be divisible by slot size (${slotMinutes}).`);
 }
@@ -370,6 +370,17 @@ function getParams() {
     topK: Number(document.getElementById("topK").value),
   };
 }
+
+// State
+let state = {
+  slotMinutes: null,
+  people: null,
+  availability: null,
+  prefStartOk: null,
+  weightsBase: null,
+  spd: null,
+  totalSlots: null,
+};
 
 function summarizeSchedule() {
   const totalSlots = state.totalSlots;
@@ -436,17 +447,16 @@ function restoreFromPersistedSchedule(sched) {
 
   renderResult("A saved schedule was loaded. You can view the timetable or run optimization.", true);
   renderTopCandidates("-", true);
+
   setVizLegend("Run optimization to display the Top-K meeting windows on a weekly grid (Mon–Sun × time slots).", true);
-  renderViz("-", true);
+  const ph = document.createElement("div");
+  ph.className = "mono muted";
+  ph.textContent = "-";
+  clearAndAppendViz(ph, true);
 }
 
-/* ===== Top-K visualization =====
-   - columns: Time | Mon..Sun
-   - rows: each time slot within a day
-   - each cell shows the best (smallest) rank covering that slot, tooltip includes all ranks covering
-*/
+/* ===== Top-K Visualization (DOM renderer, robust) ===== */
 function buildTopKMatrix(idxs, meetingLenSlots, spd) {
-  // matrix[within][day] = array of ranks (1..K) that cover this slot
   const matrix = Array.from({ length: spd }, () => Array.from({ length: 7 }, () => []));
   idxs.forEach((x, r) => {
     const rank = r + 1;
@@ -460,7 +470,6 @@ function buildTopKMatrix(idxs, meetingLenSlots, spd) {
       }
     }
   });
-  // sort ranks in each cell
   for (let within = 0; within < spd; within++) {
     for (let day = 0; day < 7; day++) {
       matrix[within][day].sort((a, b) => a - b);
@@ -470,48 +479,59 @@ function buildTopKMatrix(idxs, meetingLenSlots, spd) {
 }
 
 function rankToAlpha(rank, K) {
-  // rank=1 strongest, rank=K weakest
   const strength = (K - (rank - 1)) / K; // 1..1/K
-  return 0.12 + 0.70 * strength; // 0.82.. ~0.19
+  return 0.12 + 0.70 * strength; // 0.82..~0.19
 }
 
-function renderTopKVisualization(idxs, meetingLenSlots, slotMinutes) {
+function buildVizGridDOM(idxs, meetingLenSlots, slotMinutes, spd) {
   const K = idxs.length;
-  const spd = state.spd;
   const matrix = buildTopKMatrix(idxs, meetingLenSlots, spd);
 
-  // grid columns: 1 time column + 7 days
-  const cols = 8;
+  const grid = document.createElement("div");
+  grid.className = "viz-grid";
+  grid.style.gridTemplateColumns = "130px repeat(7, 1fr)";
 
-  let html = `<div class="viz-grid" style="grid-template-columns: 130px repeat(7, 1fr);">`;
+  // header
+  const hTime = document.createElement("div");
+  hTime.className = "viz-cell viz-head viz-time";
+  hTime.textContent = "Time";
+  grid.appendChild(hTime);
 
-  // header row
-  html += `<div class="viz-cell viz-head viz-time">Time</div>`;
   for (let d = 0; d < 7; d++) {
-    html += `<div class="viz-cell viz-head">${DAYS[d]}</div>`;
+    const h = document.createElement("div");
+    h.className = "viz-cell viz-head";
+    h.textContent = DAYS[d];
+    grid.appendChild(h);
   }
 
-  // body rows
+  // rows
   for (let within = 0; within < spd; within++) {
-    const label = hhmmFromWithin(within, slotMinutes);
-    html += `<div class="viz-cell viz-time">${label}</div>`;
+    const timeCell = document.createElement("div");
+    timeCell.className = "viz-cell viz-time";
+    timeCell.textContent = hhmmFromWithin(within, slotMinutes);
+    grid.appendChild(timeCell);
 
     for (let d = 0; d < 7; d++) {
+      const cell = document.createElement("div");
+      cell.className = "viz-cell";
       const ranks = matrix[within][d];
-      if (ranks.length === 0) {
-        html += `<div class="viz-cell"></div>`;
-      } else {
+
+      if (ranks.length > 0) {
         const best = ranks[0];
         const alpha = rankToAlpha(best, K);
-        const tip = `Ranks: ${ranks.join(", ")} (best=${best})`;
-        const bg = `rgba(255,191,26,${alpha.toFixed(3)})`;
-        html += `<div class="viz-cell viz-hit" data-tip="${tip.replace(/"/g, "&quot;")}" style="background:${bg};">${best}</div>`;
+        cell.classList.add("viz-hit");
+        cell.textContent = String(best);
+        cell.title = `Ranks: ${ranks.join(", ")} (best=${best})`;
+        cell.style.background = `rgba(255,191,26,${alpha.toFixed(3)})`;
+        cell.style.fontWeight = "900";
+        cell.style.color = "rgba(27,27,31,.9)";
       }
+
+      grid.appendChild(cell);
     }
   }
 
-  html += `</div>`;
-  return html;
+  return grid;
 }
 
 // Optimize backend
@@ -575,7 +595,11 @@ async function optimizeBackend() {
   renderResult("Running...", true);
   renderTopCandidates("-", true);
   setVizLegend("Running optimization…", true);
-  renderViz("-", true);
+
+  const ph = document.createElement("div");
+  ph.className = "mono muted";
+  ph.textContent = "-";
+  clearAndAppendViz(ph, true);
 
   let resp;
   try {
@@ -583,7 +607,6 @@ async function optimizeBackend() {
   } catch (e) {
     renderResult(`Backend request failed: ${String(e.message || e)}`, false);
     setVizLegend("Optimization failed.", false);
-    renderViz("-", true);
     return;
   }
 
@@ -621,12 +644,22 @@ async function optimizeBackend() {
     false
   );
 
-  // ✅ Visualization
-  setVizLegend(
-    "Numbers indicate the best (lowest) rank covering that slot. Hover a cell to see all ranks overlapping.",
-    false
-  );
-  renderViz(renderTopKVisualization(idxs, meetingLenSlots, state.slotMinutes), false);
+  // Visualization (robust)
+  try {
+    setVizLegend(
+      "Numbers indicate the best (lowest) rank covering that slot. Hover a cell to see all overlapping ranks.",
+      false
+    );
+    const grid = buildVizGridDOM(idxs, meetingLenSlots, state.slotMinutes, state.spd);
+    clearAndAppendViz(grid, false);
+  } catch (err) {
+    // If anything goes wrong, show the error message in the viz area for debugging
+    setVizLegend("Top-K visualization failed (see below).", false);
+    const box = document.createElement("pre");
+    box.className = "mono";
+    box.textContent = String(err?.stack || err?.message || err);
+    clearAndAppendViz(box, false);
+  }
 
   persistSchedule({ weights });
 }
@@ -656,7 +689,7 @@ function buildTemplateSchedule(numPeople, slotMinutes) {
   return { people, weights, availability, prefStartOk };
 }
 
-// Events
+// Event wiring
 document.getElementById("btnGenerate").addEventListener("click", () => {
   const params = getParams();
 
@@ -690,7 +723,11 @@ document.getElementById("btnGenerate").addEventListener("click", () => {
   renderResult("Random schedule generated. You can view the timetable or run optimization.", true);
   renderTopCandidates("-", true);
   setVizLegend("Run optimization to display the Top-K meeting windows on a weekly grid (Mon–Sun × time slots).", true);
-  renderViz("-", true);
+
+  const ph = document.createElement("div");
+  ph.className = "mono muted";
+  ph.textContent = "-";
+  clearAndAppendViz(ph, true);
 
   persistSchedule();
 });
@@ -724,7 +761,11 @@ document.getElementById("btnLoadCsv").addEventListener("click", async () => {
     renderResult("CSV loaded. You can view the timetable or run optimization.", true);
     renderTopCandidates("-", true);
     setVizLegend("Run optimization to display the Top-K meeting windows on a weekly grid (Mon–Sun × time slots).", true);
-    renderViz("-", true);
+
+    const ph = document.createElement("div");
+    ph.className = "mono muted";
+    ph.textContent = "-";
+    clearAndAppendViz(ph, true);
 
     persistSchedule({ weights: built.weights });
   } catch (e) {
@@ -763,7 +804,11 @@ setDataSummary("No data yet. Generate random data or load a CSV.", true);
 renderResult("Not run yet.", true);
 renderTopCandidates("-", true);
 setVizLegend("Run optimization to display the Top-K meeting windows on a weekly grid (Mon–Sun × time slots).", true);
-renderViz("-", true);
+
+const ph = document.createElement("div");
+ph.className = "mono muted";
+ph.textContent = "-";
+clearAndAppendViz(ph, true);
 
 // restore saved schedule
 const saved = loadPersistedSchedule();
