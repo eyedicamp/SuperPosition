@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Super Position</title>
-  <link rel="stylesheet" href="styles.css" />
+  <!-- cache-bust -->
+  <link rel="stylesheet" href="styles.css?v=qa2" />
 </head>
 <body>
   <div class="wrap">
@@ -118,7 +119,7 @@
         </label>
 
         <label>
-          Important people (e.g., 0,3)
+          Important people (e.g. 0,3)
           <input id="importantPeople" type="text" value="0,3" />
         </label>
 
@@ -131,6 +132,7 @@
           Top-K candidates
           <input id="topK" type="number" min="3" max="30" value="8" />
         </label>
+
         <label>
           Solver
           <select id="solverMode">
@@ -138,13 +140,14 @@
             <option value="qa">Quantum Annealing (D-Wave QPU)</option>
           </select>
         </label>
-        
-        <label id="dwaveTokenLabel" style="display:none;">
+
+        <!-- use class=hidden instead of inline style -->
+        <label id="dwaveTokenLabel" class="hidden">
           D-Wave API Token
           <input id="dwaveToken" type="password" placeholder="Paste your token" />
         </label>
-        
-        <label id="dwaveSolverLabel" style="display:none;">
+
+        <label id="dwaveSolverLabel" class="hidden">
           D-Wave QPU Model
           <select id="dwaveSolver">
             <option value="">Auto (any online QPU)</option>
@@ -195,7 +198,7 @@
     </footer>
   </div>
 
-  <script src="app.js"></script>
+  <!-- cache-bust -->
+  <script src="app.js?v=qa2"></script>
 </body>
 </html>
-
