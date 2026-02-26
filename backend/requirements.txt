@@ -3,6 +3,4 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 
 dwave-neal==0.6.0
-dimod==0.12.16
-
 dwave-system==1.28.0
