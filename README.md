@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/superposition-preview.png" alt="Super Position — screenshot" width="900" />
-</p>
-
 <h1 align="center">🍟 Super Position</h1>
 
 <p align="center">
@@ -11,6 +7,10 @@
 
 <p align="center">
   🌐 <b>Live Demo</b>: https://eyedicamp.github.io/SuperPosition/frontend/
+</p>
+
+<p align="center">
+  <img src="assets/superposition-preview.png" alt="Super Position — screenshot" width="900" />
 </p>
 
 ---
