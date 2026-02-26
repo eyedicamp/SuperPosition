@@ -1,5 +1,6 @@
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const STORAGE_KEY = "sp_schedule_v1";
+const UI_KEY = "sp_ui_v1"; // store solverMode etc.
 
 function slotsPerDay(slotMinutes) {
   return Math.floor(24 * 60 / slotMinutes);
@@ -333,14 +334,12 @@ function enableDataButtons(enabled) {
   if (opt) opt.disabled = !enabled;
   if (tt) tt.disabled = !enabled;
 }
-
 function setVizLegend(text, muted = false) {
   const el = document.getElementById("vizLegend");
   if (!el) return;
   el.textContent = text;
   el.classList.toggle("muted", muted);
 }
-
 function clearAndAppendViz(node, muted = false) {
   const wrap = document.getElementById("topViz");
   if (!wrap) return;
@@ -354,7 +353,19 @@ function validateMinutesDivisible(minutes, slotMinutes, label) {
   if (minutes % slotMinutes !== 0) throw new Error(`${label} (${minutes}) must be divisible by slot size (${slotMinutes}).`);
 }
 
+function loadUIState() {
+  const raw = localStorage.getItem(UI_KEY);
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { return {}; }
+}
+function saveUIState(patch) {
+  const cur = loadUIState();
+  const next = { ...cur, ...patch };
+  localStorage.setItem(UI_KEY, JSON.stringify(next));
+}
+
 function getParams() {
+  const ui = loadUIState();
   return {
     apiBase: getApiBase(),
     numPeople: Number(document.getElementById("numPeople").value),
@@ -368,7 +379,8 @@ function getParams() {
     importantPeople: parseCSVIndices(document.getElementById("importantPeople").value),
     importantWeight: Number(document.getElementById("importantWeight").value),
     topK: Number(document.getElementById("topK").value),
-    solverMode: (document.getElementById("solverMode")?.value || "sa"),
+
+    solverMode: (document.getElementById("solverMode")?.value || ui.solverMode || "sa"),
     dwaveToken: (document.getElementById("dwaveToken")?.value || ""),
     dwaveSolver: (document.getElementById("dwaveSolver")?.value || ""),
   };
@@ -458,7 +470,7 @@ function restoreFromPersistedSchedule(sched) {
   clearAndAppendViz(ph, true);
 }
 
-/* ===== Top-K Visualization (DOM renderer, robust) ===== */
+/* ===== Top-K Visualization (DOM renderer) ===== */
 function buildTopKMatrix(idxs, meetingLenSlots, spd) {
   const matrix = Array.from({ length: spd }, () => Array.from({ length: 7 }, () => []));
   idxs.forEach((x, r) => {
@@ -482,8 +494,8 @@ function buildTopKMatrix(idxs, meetingLenSlots, spd) {
 }
 
 function rankToAlpha(rank, K) {
-  const strength = (K - (rank - 1)) / K; // 1..1/K
-  return 0.12 + 0.70 * strength; // 0.82..~0.19
+  const strength = (K - (rank - 1)) / K;
+  return 0.12 + 0.70 * strength;
 }
 
 function buildVizGridDOM(idxs, meetingLenSlots, slotMinutes, spd) {
@@ -494,7 +506,6 @@ function buildVizGridDOM(idxs, meetingLenSlots, slotMinutes, spd) {
   grid.className = "viz-grid";
   grid.style.gridTemplateColumns = "130px repeat(7, 1fr)";
 
-  // header
   const hTime = document.createElement("div");
   hTime.className = "viz-cell viz-head viz-time";
   hTime.textContent = "Time";
@@ -507,7 +518,6 @@ function buildVizGridDOM(idxs, meetingLenSlots, slotMinutes, spd) {
     grid.appendChild(h);
   }
 
-  // rows
   for (let within = 0; within < spd; within++) {
     const timeCell = document.createElement("div");
     timeCell.className = "viz-cell viz-time";
@@ -522,19 +532,44 @@ function buildVizGridDOM(idxs, meetingLenSlots, slotMinutes, spd) {
       if (ranks.length > 0) {
         const best = ranks[0];
         const alpha = rankToAlpha(best, K);
-        cell.classList.add("viz-hit");
         cell.textContent = String(best);
         cell.title = `Ranks: ${ranks.join(", ")} (best=${best})`;
         cell.style.background = `rgba(255,191,26,${alpha.toFixed(3)})`;
         cell.style.fontWeight = "900";
         cell.style.color = "rgba(27,27,31,.9)";
       }
-
       grid.appendChild(cell);
     }
   }
 
   return grid;
+}
+
+// Solver UI toggle (class-based)
+function toggleDwaveUI() {
+  const mode = document.getElementById("solverMode")?.value || "sa";
+  const tokenLabel = document.getElementById("dwaveTokenLabel");
+  const solverLabel = document.getElementById("dwaveSolverLabel");
+  const show = (mode === "qa");
+
+  if (tokenLabel) tokenLabel.classList.toggle("hidden", !show);
+  if (solverLabel) solverLabel.classList.toggle("hidden", !show);
+
+  saveUIState({ solverMode: mode });
+}
+
+// Load solver list
+async function fetchDwaveSolvers(apiBase, token) {
+  const res = await fetch(`${apiBase}/dwave/solvers`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ token })
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to load solvers (${res.status}): ${text}`);
+  }
+  return await res.json(); // {solvers:[...]}
 }
 
 // Optimize backend
@@ -552,6 +587,11 @@ async function optimizeBackend() {
 
   if (!Number.isFinite(params.lateHour) || params.lateHour < 0 || params.lateHour > 23) {
     renderResult("Late cutoff hour must be between 0 and 23.", false);
+    return;
+  }
+
+  if (params.solverMode === "qa" && !params.dwaveToken) {
+    renderResult("Quantum Annealing selected, but D-Wave API Token is empty.", false);
     return;
   }
 
@@ -593,12 +633,13 @@ async function optimizeBackend() {
     pref_bonus: params.prefBonus,
     late_hour: params.lateHour,
     late_penalty_per_slot: params.latePenalty,
+
     solver_mode: params.solverMode,
     dwave_token: params.solverMode === "qa" ? params.dwaveToken : null,
     dwave_solver: params.solverMode === "qa" ? (params.dwaveSolver || null) : null
   };
 
-  renderResult("Running...", true);
+  renderResult(`Running... (solver_mode=${params.solverMode})`, true);
   renderTopCandidates("-", true);
   setVizLegend("Running optimization…", true);
 
@@ -650,7 +691,6 @@ async function optimizeBackend() {
     false
   );
 
-  // Visualization (robust)
   try {
     setVizLegend(
       "Numbers indicate the best (lowest) rank covering that slot. Hover a cell to see all overlapping ranks.",
@@ -659,7 +699,6 @@ async function optimizeBackend() {
     const grid = buildVizGridDOM(idxs, meetingLenSlots, state.slotMinutes, state.spd);
     clearAndAppendViz(grid, false);
   } catch (err) {
-    // If anything goes wrong, show the error message in the viz area for debugging
     setVizLegend("Top-K visualization failed (see below).", false);
     const box = document.createElement("pre");
     box.className = "mono";
@@ -695,7 +734,7 @@ function buildTemplateSchedule(numPeople, slotMinutes) {
   return { people, weights, availability, prefStartOk };
 }
 
-// Event wiring
+// Wire events
 document.getElementById("btnGenerate").addEventListener("click", () => {
   const params = getParams();
 
@@ -804,30 +843,8 @@ document.getElementById("btnDownloadCsvTemplate").addEventListener("click", () =
   downloadTextFile(`super_position_csv_template_${params.numPeople}p_${params.slotMinutes}m.csv`, csv);
 });
 
-function toggleDwaveUI() {
-  const mode = document.getElementById("solverMode")?.value || "sa";
-  const tokenLabel = document.getElementById("dwaveTokenLabel");
-  const solverLabel = document.getElementById("dwaveSolverLabel");
-  const show = (mode === "qa");
-  if (tokenLabel) tokenLabel.style.display = show ? "" : "none";
-  if (solverLabel) solverLabel.style.display = show ? "" : "none";
-}
-
+// solver UI events
 document.getElementById("solverMode")?.addEventListener("change", toggleDwaveUI);
-toggleDwaveUI();
-
-async function fetchDwaveSolvers(apiBase, token) {
-  const res = await fetch(`${apiBase}/dwave/solvers`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ token })
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to load solvers (${res.status}): ${text}`);
-  }
-  return await res.json(); // {solvers:[...]}
-}
 
 document.getElementById("btnLoadSolvers")?.addEventListener("click", async () => {
   try {
@@ -839,7 +856,6 @@ document.getElementById("btnLoadSolvers")?.addEventListener("click", async () =>
     const sel = document.getElementById("dwaveSolver");
     if (!sel) return;
 
-    // reset options
     sel.innerHTML = "";
     const opt0 = document.createElement("option");
     opt0.value = "";
@@ -875,3 +891,12 @@ if (saved && saved.availability && saved.prefStartOk && saved.people && saved.sl
   restoreFromPersistedSchedule(saved);
 }
 
+// restore solverMode selection + apply toggle
+{
+  const ui = loadUIState();
+  if (ui.solverMode) {
+    const sel = document.getElementById("solverMode");
+    if (sel) sel.value = ui.solverMode;
+  }
+  toggleDwaveUI();
+}
