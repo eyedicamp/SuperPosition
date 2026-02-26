@@ -51,17 +51,16 @@ body{
   text-shadow: 0 10px 24px rgba(27,27,31,.10);
 }
 
+/* ✅ ensure emoji always visible (not clipped/transparent) */
 .title-emoji{
   display:inline-block;
   margin-right: 10px;
   transform: translateY(-2px);
-
   color: #1b1b1f;
   background: none;
   -webkit-background-clip: initial;
   background-clip: initial;
   -webkit-text-fill-color: #1b1b1f;
-
   filter: drop-shadow(0 8px 14px rgba(27,27,31,.15));
 }
 
@@ -194,7 +193,7 @@ button:disabled{
 
 .footer{ text-align:center; margin-top: 10px; }
 
-/* ===== timetable page ===== */
+/* ===== timetable page (existing) ===== */
 .tabs{ display:flex; gap:8px; flex-wrap:wrap; }
 .tab{
   padding:8px 12px;
@@ -255,9 +254,87 @@ button:disabled{
 
 .slotcell{ background:#fff; }
 .slotcell.busy{ background: rgba(27,27,31,.10); }
-
 .slotcell.pref{
   background: linear-gradient(180deg, rgba(255,216,77,.95), rgba(255,242,191,.55));
   border: 1px solid rgba(27,27,31,.10);
 }
 
+/* ===== Top-K visualization grid ===== */
+.viz-legend{
+  font-size: 12.5px;
+  line-height: 1.35;
+  margin-bottom: 10px;
+}
+
+.viz-wrap{
+  border-radius:14px;
+  border:1px solid rgba(27,27,31,.10);
+  background:#fff;
+  overflow:auto;
+}
+
+.viz-grid{
+  display:grid;
+  gap:0;
+  min-width: 860px; /* keeps layout stable; scroll if needed */
+}
+
+.viz-cell{
+  height: 26px;
+  border-right:1px solid rgba(27,27,31,.06);
+  border-bottom:1px solid rgba(27,27,31,.06);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size: 11px;
+  color: rgba(27,27,31,.75);
+  user-select:none;
+}
+
+.viz-head{
+  height: 34px;
+  font-weight: 900;
+  background: rgba(255,242,191,.55);
+  color: var(--text);
+}
+
+.viz-time{
+  justify-content:flex-start;
+  padding-left: 10px;
+  font-weight: 800;
+  color: var(--text);
+  background: #fff;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+
+.viz-head.viz-time{
+  background: rgba(255,242,191,.75);
+  z-index: 4;
+}
+
+.viz-hit{
+  font-weight: 900;
+  color: rgba(27,27,31,.9);
+}
+
+.viz-hit[data-tip]{
+  position: relative;
+}
+.viz-hit[data-tip]:hover::after{
+  content: attr(data-tip);
+  position:absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(27,27,31,.15);
+  background: rgba(255,255,255,.98);
+  color: var(--text);
+  white-space: nowrap;
+  box-shadow: 0 10px 24px rgba(27,27,31,.12);
+  z-index: 10;
+  font-size: 12px;
+}
