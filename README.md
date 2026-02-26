@@ -60,37 +60,6 @@
 
 ---
 
-## 🔌 API (as used by the frontend)
-
-### `POST /solve`
-
-Frontend sends fields like:
-
-- `num_people`
-- `slot_minutes`
-- `meeting_len_slots`
-- `availability` (P × T boolean matrix)
-- `pref_start_ok` (P × T boolean matrix)
-- `weights` (length P)
-- `pref_bonus`
-- `late_hour`
-- `late_penalty_per_slot`
-- `solver_mode`: `"sa"` or `"qa"`
-- `dwave_token`, `dwave_solver` (QA only)
-
-Response fields expected by the frontend:
-
-- `best_start`, `best_end`, `score`
-- `attendees` (indices who can attend the whole meeting)
-- `pref_hit_people` (indices whose preference-start is satisfied)
-- `meta` (optional)
-
-### `POST /dwave/solvers`
-
-- QA mode: lists available solvers for a given D‑Wave token.
-
----
-
 ## 🧾 CSV Format
 
 Header:
@@ -103,20 +72,6 @@ slot_minutes,person_id,weight,day,time,available,pref
 - `time`: `HH:MM`
 - `available`: 1 / 0
 - `pref`: 1 / 0 (preference start-slot hint)
-
----
-
-## 🧠 Scoring (frontend view)
-
-For Top‑K visualization, the frontend evaluates candidates with a score shaped like:
-
-- `score = weighted_attend + pref_bonus * weighted_pref - late_penalty_per_slot * late_overlap`
-
-Where:
-
-- ✅ `weighted_attend`: sum of weights of people who can attend
-- ⭐ `weighted_pref`: sum of weights whose preferred start is satisfied
-- 🌙 `late_overlap`: number of meeting slots after `late_hour`
 
 ---
 
